@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+option go_package = "github.com/afking/starlarkproto/testpb";
+
+package starlarkproto.test;
+
+enum Enum {
+  ENUM_A = 0;
+  ENUM_B = 1;
+}
+
+message Message {
+  string body = 1;
+
+  enum Type {
+    UNKNOWN = 0;
+    GREETING = 1;
+  }
+  Type type = 2;
+}

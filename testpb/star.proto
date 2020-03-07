@@ -11,10 +11,12 @@ enum Enum {
 
 message Message {
   string body = 1;
-
   enum Type {
     UNKNOWN = 0;
     GREETING = 1;
   }
   Type type = 2;
+  repeated string strings = 3;
+  Message nested = 4;
+  map<string, Message> maps = 5;
 }

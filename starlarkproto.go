@@ -69,12 +69,12 @@ func Make(resolver protodesc.Resolver) func(*starlark.Thread, *starlark.Builtin,
 //                 │ Uint64Kind, Fixed64Kind
 //  Float          │ FloatKind, DoubleKind
 //  String         │ StringKind, BytesKind
-//  *List          │ []<Kind>
+//  *List          │ List<Kind>
 //  Tuple          │ n/a
 //  *Dict          │ Map<Kind><Kind>
 //  *Set           │ n/a
 //
-func protoToStar(v protoreflect.Value) starlark.Value {
+func protoToStar(v protoreflect.Value, fd protoreflect.FieldDescriptor) starlark.Value {
 	switch v := v.Interface().(type) {
 	case nil:
 		return starlark.None
@@ -98,10 +98,33 @@ func protoToStar(v protoreflect.Value) starlark.Value {
 		return starlark.String(v)
 	case protoreflect.EnumNumber:
 		return starlark.MakeInt(int(v)) // TODO: strings?
+		//return Enum{i: int32(v), typ: fd.Kind().String()}
+	case protoreflect.List:
+		// TODO: freeze
+		if !v.IsValid() {
+			return starlark.None
+		}
+		return &List{
+			list: v,
+			fd:   fd,
+		}
+	case protoreflect.Message:
+		if !v.IsValid() {
+			return starlark.None
+		}
+		fmt.Println("---\n", v.IsValid(), "\n", fd)
+		// TODO: freeze
+		return &Message{
+			msg: v,
+		}
+		//return starlark.None
+	case protoreflect.Map:
+		return starlark.None
 	default:
 		panic(fmt.Sprintf("unhandled proto type %s %T", v, v))
 	}
 }
+
 func starToProto(v starlark.Value, fd protoreflect.FieldDescriptor) (protoreflect.Value, error) {
 	switch kind := fd.Kind(); kind {
 	case protoreflect.BoolKind:
@@ -176,6 +199,17 @@ func starToProto(v starlark.Value, fd protoreflect.FieldDescriptor) (protoreflec
 	return protoreflect.Value{}, fmt.Errorf("proto: unknown type conversion %s", v.Type())
 }
 
+func (m *Message) get(fd protoreflect.FieldDescriptor) protoreflect.Value {
+	return m.msg.Get(fd)
+}
+
+func (m *Message) mutable(fd protoreflect.FieldDescriptor) protoreflect.Value {
+	if fd.IsMap() || fd.IsList() || fd.Kind() == protoreflect.MessageKind {
+		return m.msg.Mutable(fd)
+	}
+	return m.msg.Get(fd)
+}
+
 //func FromKeywords(md protoreflect.MessageDescriptor, kwargs []starlark.Tuple) (*Message, error) {
 func FromKeywords(msg protoreflect.Message, kwargs []starlark.Tuple) (*Message, error) {
 	// TODO: clear?
@@ -208,8 +242,12 @@ func (m *Message) String() string {
 		fd := fds.Get(i)
 		buf.WriteString(string(fd.Name()))
 		buf.WriteString(" = ")
-		val := m.msg.Get(fd)
-		buf.WriteString(val.String()) // TODO: convert to starlark first...
+		val := m.get(fd)
+
+		// Method here should always be get?
+
+		v := protoToStar(val, fd)
+		buf.WriteString(v.String())
 	}
 	buf.WriteByte(')')
 	return buf.String()
@@ -225,12 +263,12 @@ func (m *Message) Hash() (uint32, error) {
 	fds := desc.Fields()
 	for i := 0; i < fds.Len(); i++ {
 		fd := fds.Get(i)
-		val := m.msg.Get(fd)
+		val := m.get(fd)
 
 		namehash, _ := starlark.String(fd.Name()).Hash()
 		x = x ^ 3*namehash
 
-		v := protoToStar(val)
+		v := protoToStar(val, fd)
 		y, err := v.Hash()
 		if err != nil {
 			return 0, err
@@ -251,15 +289,15 @@ func (m *Message) Attr(name string) (starlark.Value, error) {
 		return nil, err
 	}
 
-	v := m.msg.Get(fd)
-	return protoToStar(v), nil
+	pv := m.mutable(fd) // Attr can mutate
+	return protoToStar(pv, fd), nil
 }
 
 func (x *Message) Binary(op syntax.Token, y starlark.Value, side starlark.Side) (starlark.Value, error) {
 	return nil, nil // unhandled
 }
 
-// AttrNames returns a new sorted list of the struct fields.
+// AttrNames returns a new sorted list of the message fields.
 func (m *Message) AttrNames() []string {
 	desc := m.msg.Descriptor()
 	fds := desc.Fields()
@@ -297,3 +335,181 @@ func (m *Message) SetField(name string, val starlark.Value) error {
 	m.msg.Set(fd, v)
 	return nil
 }
+
+//type method func(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error)
+
+var (
+	listMethods = map[string]*starlark.Builtin{
+		"append": starlark.NewBuiltin("append", list_append),
+		//"clear":  list_clear,
+		//"extend": list_extend,
+		//"index":  list_index,
+		//"insert": list_insert,
+		//"pop":    list_pop,
+		//"remove": list_remove,
+	}
+)
+
+func bindAttr(recv starlark.Value, name string, methods map[string]*starlark.Builtin) (starlark.Value, error) {
+	b := methods[name]
+	if b == nil {
+		return nil, nil // no such method
+	}
+	return b.BindReceiver(recv), nil
+}
+
+// https://github.com/google/starlark-go/blob/6677ee5c7211380ec7e6a1b50dc45287e40ca9e1/starlark/library.go#L153
+func builtinAttrNames(methods map[string]*starlark.Builtin) []string {
+	names := make([]string, 0, len(methods))
+	for name := range methods {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// List represents a repeated field as a starlark.List.
+type List struct {
+	//msg protoreflect.Message
+	//fd  protoreflect.FieldDescriptor
+	list protoreflect.List
+	fd   protoreflect.FieldDescriptor
+
+	frozen    bool
+	itercount uint32
+}
+
+func (l *List) Attr(name string) (starlark.Value, error) { return bindAttr(l, name, listMethods) }
+func (l *List) AttrNames() []string                      { return builtinAttrNames(listMethods) }
+
+func (l *List) String() string {
+	buf := new(strings.Builder)
+	buf.WriteByte('[')
+	for i := 0; i < l.Len(); i++ {
+		if i > 0 {
+			buf.WriteString(", ")
+		}
+		buf.WriteString(l.Index(i).String())
+	}
+	buf.WriteByte(']')
+	return buf.String()
+}
+
+func (l *List) Freeze() {
+	if !l.frozen {
+		l.frozen = true
+		for i := 0; i < l.Len(); i++ {
+			l.Index(i).Freeze()
+		}
+	}
+}
+
+func (l *List) Hash() (uint32, error) {
+	// TODO: make hashable???
+	return 0, fmt.Errorf("unhashable type: list")
+}
+
+func (l *List) checkMutable(verb string) error {
+	if l.frozen {
+		return fmt.Errorf("cannot %s frozen list", verb)
+	}
+	if l.itercount > 0 {
+		return fmt.Errorf("cannot %s list during iteration", verb)
+	}
+	return nil
+}
+
+func (l *List) Index(i int) starlark.Value {
+	return protoToStar(l.list.Get(i), l.fd)
+}
+
+type listIterator struct {
+	l *List
+	i int
+}
+
+func (it *listIterator) Next(p *starlark.Value) bool {
+	if it.i < it.l.Len() {
+		val := it.l.list.Get(it.i)
+		*p = protoToStar(val, it.l.fd)
+		it.i++
+		return true
+	}
+	return false
+}
+
+func (it *listIterator) Done() {
+	if !it.l.frozen {
+		it.l.itercount--
+	}
+}
+
+func (l *List) Iterate() starlark.Iterator {
+	if !l.frozen {
+		l.itercount++
+	}
+	return &listIterator{l: l}
+}
+
+func (l *List) Type() string         { return l.fd.Kind().String() }
+func (l *List) Len() int             { return l.list.Len() }
+func (l *List) Truth() starlark.Bool { return l.Len() > 0 }
+
+func (l *List) SetIndex(i int, v starlark.Value) error {
+	if err := l.checkMutable("assign to element of"); err != nil {
+		return err
+	}
+
+	val, err := starToProto(v, l.fd)
+	if err != nil {
+		return err
+	}
+
+	l.list.Set(i, val)
+	return nil
+}
+
+func list_append(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var object starlark.Value
+	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 1, &object); err != nil {
+		return nil, err
+	}
+	recv := b.Receiver().(*List)
+	if err := recv.Append(object); err != nil {
+		return nil, err
+	}
+	return starlark.None, nil
+}
+
+func (l *List) Append(v starlark.Value) error {
+	if err := l.checkMutable("append to"); err != nil {
+		return err
+	}
+	pv, err := starToProto(v, l.fd)
+	if err != nil {
+		return err
+	}
+	l.list.Append(pv)
+	return nil
+}
+
+//// Enum is the type of a protobuf enum.
+//type Enum struct {
+//	i   int32
+//	str string // string representation
+//	typ string
+//}
+//
+//func (e Enum) String() string {
+//	if e.str != "" {
+//		return e.str
+//	}
+//	return strconv.Itoa(int(e.i))
+//}
+//func (e Enum) Type() string          { return e.typ }
+//func (e Enum) Freeze()               {} // immutable
+//func (e Enum) Truth() starlark.Bool  { return e.i > 0 }
+//func (e Enum) Hash() (uint32, error) { return uint32(e.i), nil }
+//func (x Enum) CompareSameType(op syntax.Token, y_ starlark.Value, depth int) (bool, error) {
+//	return false, nil // TODO:...
+//}

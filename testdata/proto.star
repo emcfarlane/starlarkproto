@@ -6,10 +6,11 @@ s = struct(body = "hello")
 assert.eq(s, s)
 print(s)
 
-#m = proto("starlarkproto.test.Message", body="Hello, world!")
 # Prefer load by import path for dynamic protobuf support
-test = proto.load("github.com/afking/starlarkproto/testpb/star.proto")
+#m = proto("starlarkproto.test.Message", body="Hello, world!")
 #test = proto.package("starlarkproto.test")
+#test = 1
+test = proto.file("github.com/afking/starlarkproto/testpb/star.proto")
 print("loaded!!!!")
 print(dir(test))
 m = test.Message(body="Hello, world!")
@@ -22,12 +23,31 @@ def set_field_invalid():
 	m.body = 2
 assert.fails(set_field_invalid, "proto: *")
 
+
+# Enums
+enum = proto.new("starlarkproto.test.Enum")
+enum_a = enum(0)
+enum_a_alt = enum("ENUM_A")
+assert.eq(enum_a, enum_a_alt)
+
+enum_file = test.Enum
+enum_b = enum_file(1)
+enum_b_alt = enum_file("ENUM_B")
+assert.eq(enum_b, enum_b_alt)
+assert.ne(enum_a, enum_b)
+#print("ENUMS", enum_a, enum_b)
+
+# Nested Enums
+message_unknown = test.Message.Type.UNKNOWN
+message_greeting = test.Message.Type.GREETING
+assert.ne(message_unknown, message_greeting)
+
 # Enums can be assigned by String or Ints
-assert.eq(m.type, 0)
+assert.eq(m.type, message_unknown)
 m.type = "GREETING"
-assert.eq(m.type, 1)
+assert.eq(m.type, message_greeting)
 m.type = 0
-assert.eq(m.type, 0)
+assert.eq(m.type, message_unknown)
 
 # Lists are references
 b = m.strings
@@ -42,12 +62,12 @@ assert.eq(m.nested.body, "nested")
 # Message can be created from structs
 m.nested = struct(body = "struct", type = "GREETING")
 assert.eq(m.nested.body, "struct")
-assert.eq(m.nested.type, 1)
+assert.eq(m.nested.type, message_greeting)
 print(m)
 
 # Messages can be assigned None to delete
 m.nested = None
-assert.eq(m.nested, None)
+#assert.eq(m.nested, None)
 
 # Maps init copy dicts
 m.maps = {

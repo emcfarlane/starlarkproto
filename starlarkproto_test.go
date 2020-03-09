@@ -9,6 +9,7 @@ import (
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"
 	"go.starlark.net/starlarktest"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 
 	_ "github.com/afking/starlarkproto/testpb" // import side effect
@@ -22,11 +23,22 @@ func load(thread *starlark.Thread, module string) (starlark.StringDict, error) {
 }
 
 func TestExecFile(t *testing.T) {
+	protoregistry.GlobalFiles.RangeFiles(func(p protoreflect.FileDescriptor) bool {
+		fmt.Println("file!", p.FullName())
+		fmt.Println("     ", p.Path())
+		fmt.Println("     ", p.Name())
+		fmt.Println("     ", p.Package())
+		return true
+	})
+
+	//protoregistry.GlobalFiles.RangeFilesByPackage("starlarkproto.test", func(p protoreflect.FileDescriptor) bool {
+	//	panic(p)
+	//})
 	thread := &starlark.Thread{Load: load}
 	starlarktest.SetReporter(thread, t)
 	globals := starlark.StringDict{
 		"struct": starlark.NewBuiltin("struct", starlarkstruct.Make),
-		"proto":  starlark.NewBuiltin("proto", Make(protoregistry.GlobalFiles)),
+		"proto":  NewModule(protoregistry.GlobalFiles),
 	}
 
 	files, err := filepath.Glob("testdata/*.star")

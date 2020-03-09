@@ -1,0 +1,7 @@
+syntax = "proto3";
+
+option go_package = "github.com/afking/starlarkproto/testpb";
+
+package starlarkproto.test;
+
+message Another {}

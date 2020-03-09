@@ -6,7 +6,13 @@ s = struct(body = "hello")
 assert.eq(s, s)
 print(s)
 
-m = proto("starlarkproto.test.Message", body="Hello, world!")
+#m = proto("starlarkproto.test.Message", body="Hello, world!")
+# Prefer load by import path for dynamic protobuf support
+test = proto.load("github.com/afking/starlarkproto/testpb/star.proto")
+#test = proto.package("starlarkproto.test")
+print("loaded!!!!")
+print(dir(test))
+m = test.Message(body="Hello, world!")
 assert.eq(m, m)
 print(m)
 assert.eq(m.body, "Hello, world!")
@@ -40,7 +46,8 @@ assert.eq(m.nested.type, 1)
 print(m)
 
 # Messages can be assigned None to delete
-m.nested = None # TODO: None lazy get
+m.nested = None
+assert.eq(m.nested, None)
 
 # Maps init copy dicts
 m.maps = {

@@ -10,13 +10,164 @@ import (
 	"go.starlark.net/syntax"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/dynamicpb"
 )
+
+//func NewModule(files *protoregistry.Files) *starlarkstruct.Module {
+func NewModule(resolver protodesc.Resolver) *starlarkstruct.Module {
+	p := &proto{resolver: resolver}
+
+	return &starlarkstruct.Module{
+		Name: "proto",
+		Members: starlark.StringDict{
+			"load":      starlark.NewBuiltin("proto.load", p.load),
+			"new":       starlark.NewBuiltin("new", p.new),
+			"marshal":   starlark.NewBuiltin("proto.marshal", marshal),
+			"unmarshal": starlark.NewBuiltin("proto.unmarshal", unmarshal),
+		},
+	}
+}
+
+type proto struct {
+	//files *protoregistry.Files
+	resolver protodesc.Resolver
+}
+
+func (p *proto) load(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var name string
+	if err := starlark.UnpackPositionalArgs("proto.package", args, kwargs, 1, &name); err != nil {
+		return nil, err
+	}
+	//fullname := protoreflect.FullName(name)
+
+	fileDesc, err := p.resolver.FindFileByPath(name)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Descriptor{desc: fileDesc}, nil
+
+	//if p.files.NumFilesByPackage(fullname) == 0 {
+	//	return nil, os.ErrNotExist // TODO: errors
+	//}
+
+	//attrs := make(map[string]bool)
+	//p.files.RangeFilesByPackage(fullname, func(p protoreflect.FileDescriptor) bool {
+	//	fmt.Println("file!", p.FullName())
+	//	fmt.Println("     ", p.Path())
+	//	fmt.Println("     ", p.Name())
+
+	//	eds := p.Enums()
+	//	for i := 0; i < eds.Len(); i++ {
+	//		ed := eds.Get(i)
+
+	//		fmt.Println(ed.Name())
+	//		attrs[string(ed.Name())] = true
+
+	//		//evds := ed.Values()
+	//		//for j := 0; j < evds.Len(); j++ {
+	//		//	evd := evds.Get(i)
+	//		//	fmt.Println("\t", evd.FullName(), evd.Name())
+	//		//	attrs[string(evd.Name())] = true
+	//		//}
+	//	}
+
+	//	mds := p.Messages()
+	//	for i := 0; i < mds.Len(); i++ {
+	//		md := mds.Get(i)
+
+	//		fmt.Println(md.Name())
+	//		attrs[string(md.Name())] = true
+	//	}
+
+	//	return true
+	//})
+
+	//desc, err := p.resolver.FindFileByPath(name)
+	//if err != nil {
+	//	return nil, err
+	//}
+
+	//// TODO: load any descriptor?
+	//fmt.Println(desc)
+	//fileDesc, ok := desc.(protoreflect.FileDescriptor)
+	//if !ok {
+	//	return nil, fmt.Errorf("proto: not file descriptor %q", desc.FullName())
+	//}
+	//return &Package{name: name, attrs: attrs, files: p.files}, nil
+}
+
+func (p *proto) new(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	return nil, fmt.Errorf("TODO: load descriptor by FullName")
+}
+
+func marshal(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	//starlark.UnpackPositionalArgs
+	return nil, nil
+}
+
+func unmarshal(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	return nil, nil
+}
+
+type Descriptor struct {
+	desc protoreflect.Descriptor
+}
+
+func (d *Descriptor) String() string        { return string(d.desc.Name()) }
+func (d *Descriptor) Type() string          { return "proto.package" }
+func (d *Descriptor) Freeze()               {}
+func (d *Descriptor) Truth() starlark.Bool  { return d.desc != nil }
+func (d *Descriptor) Hash() (uint32, error) { return 0, fmt.Errorf("unhashable type: proto.desc") }
+func (d *Descriptor) Name() string          { return d.String() } // TODO
+func (d *Descriptor) CallInternal(thread *starlark.Thread, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+
+	return nil, fmt.Errorf("TODO: desc")
+}
+
+type Package struct {
+	name  string
+	attrs map[string]bool
+	files *protoregistry.Files
+}
+
+func (p *Package) String() string        { return p.name }
+func (p *Package) Type() string          { return "proto.package" }
+func (p *Package) Freeze()               {}
+func (p *Package) Truth() starlark.Bool  { return p.attrs != nil }
+func (p *Package) Hash() (uint32, error) { return 0, fmt.Errorf("unhashable type: proto.package") }
+
+func (p *Package) Attr(name string) (starlark.Value, error) {
+	if !p.attrs[name] {
+		return nil, nil
+	}
+	fullname := protoreflect.FullName(p.name + "." + name)
+	fmt.Println("FULLNAME", fullname)
+
+	desc, err := p.files.FindDescriptorByName(fullname)
+	if err != nil {
+		return nil, err
+	}
+	return &Descriptor{desc: desc}, nil
+}
+
+func (p *Package) AttrNames() []string {
+	names := make([]string, 0, len(p.attrs))
+	for name := range p.attrs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
 
 // Message represents a proto.Message as a starlark.Value.
 type Message struct {
 	msg protoreflect.Message
 }
+
+// ProtoReflect implements protobuf reflect API
+func (m *Message) ProtoReflect() protoreflect.Message { return m.msg }
 
 // Make creates the implementation of a builtin function that instantiates a
 // mutable message based on a protobuf Message descriptor.
@@ -714,7 +865,18 @@ func (m *Map) Iterate() starlark.Iterator {
 	return &keyIterator{m: m, keys: m.Keys()}
 }
 func (m *Map) SetKey(k, v starlark.Value) error {
-	return fmt.Errorf("todo")
+	var keyval protoreflect.Value
+	if err := starToProto(k, m.keyfd, &keyval); err != nil {
+		return err
+	}
+	key := keyval.MapKey()
+
+	val := m.m.NewValue()
+	if err := starToProto(k, m.valfd, &val); err != nil {
+		return err
+	}
+	m.m.Set(key, val)
+	return nil
 }
 func (m *Map) String() string {
 	buf := new(strings.Builder)

@@ -11,6 +11,11 @@ assert.eq(m, m)
 print(m)
 assert.eq(m.body, "Hello, world!")
 
+# Setting value asserts types
+def set_field_invalid():
+	m.body = 2
+assert.fails(set_field_invalid, "proto: *")
+
 # Enums can be assigned by String or Ints
 assert.eq(m.type, 0)
 m.type = "GREETING"
@@ -23,3 +28,23 @@ b = m.strings
 b.append("hello")
 assert.eq(m.strings[0], "hello")
 print(m)
+
+# Structs init on attr
+m.nested.body = "nested"
+assert.eq(m.nested.body, "nested")
+
+# Message can be created from structs
+m.nested = struct(body = "struct", type = "GREETING")
+assert.eq(m.nested.body, "struct")
+assert.eq(m.nested.type, 1)
+print(m)
+
+# Messages can be assigned None to delete
+m.nested = None # TODO: None lazy get
+
+# Maps init copy dicts
+m.maps = {
+	"hello": struct(body = "world!", type = "GREETING"),
+}
+print(m)
+

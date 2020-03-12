@@ -75,3 +75,9 @@ m.maps = {
 }
 print(m)
 
+# Marshal/Unmarshal
+data = proto.marshal(m)
+m2 = test.Message()
+proto.unmarshal(data, m2)
+assert.eq(m, m2)
+

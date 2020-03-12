@@ -8,32 +8,35 @@ import (
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"
 	"go.starlark.net/syntax"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
 //func NewModule(files *protoregistry.Files) *starlarkstruct.Module {
 func NewModule(resolver protodesc.Resolver) *starlarkstruct.Module {
-	p := &proto{resolver: resolver}
+	p := &starproto{resolver: resolver}
 
 	return &starlarkstruct.Module{
 		Name: "proto",
 		Members: starlark.StringDict{
 			"file":      starlark.NewBuiltin("proto.file", p.file),
 			"new":       starlark.NewBuiltin("proto.new", p.new),
-			"marshal":   starlark.NewBuiltin("proto.marshal", marshal),
-			"unmarshal": starlark.NewBuiltin("proto.unmarshal", unmarshal),
+			"marshal":   starlark.NewBuiltin("proto.marshal", p.marshal),
+			"unmarshal": starlark.NewBuiltin("proto.unmarshal", p.unmarshal),
 		},
 	}
 }
 
-type proto struct {
+type starproto struct {
 	//files *protoregistry.Files
 	resolver protodesc.Resolver
+	types    protoregistry.Types // TODO: wrap resolver to register extensions.
 }
 
-func (p *proto) file(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+func (p *starproto) file(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var name string
 	if err := starlark.UnpackPositionalArgs("proto.package", args, kwargs, 1, &name); err != nil {
 		return nil, err
@@ -46,7 +49,7 @@ func (p *proto) file(thread *starlark.Thread, b *starlark.Builtin, args starlark
 	return &Descriptor{desc: fileDesc}, nil
 }
 
-func (p *proto) new(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+func (p *starproto) new(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var name string
 	if err := starlark.UnpackPositionalArgs("proto.package", args, kwargs, 1, &name); err != nil {
 		return nil, err
@@ -60,13 +63,43 @@ func (p *proto) new(thread *starlark.Thread, b *starlark.Builtin, args starlark.
 	return &Descriptor{desc: desc}, nil
 }
 
-func marshal(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	//starlark.UnpackPositionalArgs
-	return nil, fmt.Errorf("TODO: marshal")
+func (p *starproto) marshal(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var msg *Message
+	var options proto.MarshalOptions
+	if err := starlark.UnpackPositionalArgs(
+		"proto.unmarshal", args, kwargs, 1, &msg,
+		"allow_partial?", &options.AllowPartial,
+		"deterministic?", &options.Deterministic,
+		"use_cache_size?", &options.UseCachedSize,
+	); err != nil {
+		return nil, err
+	}
+	data, err := options.Marshal(msg)
+	if err != nil {
+		return nil, err
+	}
+	return starlark.String(string(data)), nil
 }
 
-func unmarshal(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	return nil, fmt.Errorf("TODO: unmarshal")
+func (p *starproto) unmarshal(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var str string
+	var msg *Message
+	options := proto.UnmarshalOptions{
+		Resolver: &p.types,
+	}
+	if err := starlark.UnpackPositionalArgs(
+		"proto.unmarshal", args, kwargs, 2, &str, &msg,
+		"merge?", &options.Merge,
+		"allow_partial?", &options.AllowPartial,
+		"discard_unknown?", &options.DiscardUnknown,
+	); err != nil {
+		return nil, err
+	}
+
+	if err := proto.Unmarshal([]byte(str), msg); err != nil {
+		return nil, err
+	}
+	return starlark.None, nil
 }
 
 type Descriptor struct {
@@ -110,7 +143,6 @@ func (d *Descriptor) Attr(name string) (starlark.Value, error) {
 	// TODO: cache?
 	switch v := d.desc.(type) {
 	case protoreflect.FileDescriptor:
-		fmt.Println("file")
 		eds := v.Enums()
 		for i := 0; i < eds.Len(); i++ {
 			ed := eds.Get(i)
@@ -182,6 +214,8 @@ func (d *Descriptor) AttrNames() []string {
 			names = append(names, string(md.Name()))
 		}
 
+		// TODO: extensions
+
 	case protoreflect.EnumDescriptor:
 		vals := v.Values()
 		for i := 0; i < vals.Len(); i++ {
@@ -201,6 +235,9 @@ func (d *Descriptor) AttrNames() []string {
 			md := mds.Get(i)
 			names = append(names, string(md.Name()))
 		}
+
+		// TODO: oneofs
+		// TODO: extensions
 	}
 	sort.Strings(names)
 	return names
@@ -296,15 +333,12 @@ func starToProto(v starlark.Value, fd protoreflect.FieldDescriptor, val *protore
 	switch kind := fd.Kind(); kind {
 	case protoreflect.BoolKind:
 		if b, ok := v.(starlark.Bool); ok {
-			//return protoreflect.ValueOfBool(bool(b)), nil
-			//return protoreflect.ValueOfBool(bool(b)), nil
 			*val = protoreflect.ValueOfBool(bool(b))
 			return nil
 		}
 	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind:
 		if x, ok := v.(starlark.Int); ok {
 			v, _ := x.Int64()
-			//return protoreflect.ValueOfInt32(int32(v)), nil
 			*val = protoreflect.ValueOfInt32(int32(v))
 			return nil
 		}
@@ -312,7 +346,6 @@ func starToProto(v starlark.Value, fd protoreflect.FieldDescriptor, val *protore
 	case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind:
 		if x, ok := v.(starlark.Int); ok {
 			v, _ := x.Int64()
-			//return protoreflect.ValueOfInt64(int64(v)), nil
 			*val = protoreflect.ValueOfInt64(int64(v))
 			return nil
 		}
@@ -320,7 +353,6 @@ func starToProto(v starlark.Value, fd protoreflect.FieldDescriptor, val *protore
 	case protoreflect.Uint32Kind, protoreflect.Fixed32Kind:
 		if x, ok := v.(starlark.Int); ok {
 			v, _ := x.Uint64()
-			//return protoreflect.ValueOfUint32(uint32(v)), nil
 			*val = protoreflect.ValueOfUint32(uint32(v))
 			return nil
 
@@ -329,7 +361,6 @@ func starToProto(v starlark.Value, fd protoreflect.FieldDescriptor, val *protore
 	case protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
 		if x, ok := v.(starlark.Int); ok {
 			v, _ := x.Uint64()
-			//return protoreflect.ValueOfUint64(uint64(v)), nil
 			*val = protoreflect.ValueOfUint64(uint64(v))
 			return nil
 		}
@@ -589,6 +620,20 @@ func (m *Message) SetField(name string, val starlark.Value) error {
 	return nil
 }
 
+func (x *Message) CompareSameType(op syntax.Token, y_ starlark.Value, depth int) (bool, error) {
+	y := y_.(*Message)
+	switch op {
+	case syntax.EQL:
+		return proto.Equal(x, y), nil
+	case syntax.NEQ:
+		return !proto.Equal(x, y), nil
+	case syntax.LE, syntax.LT, syntax.GE, syntax.GT:
+		return false, fmt.Errorf("%v not implemented", op)
+	default:
+		panic(op)
+	}
+}
+
 var (
 	listMethods = map[string]*starlark.Builtin{
 		"append": starlark.NewBuiltin("append", list_append),
@@ -794,8 +839,9 @@ func (x Enum) CompareSameType(op syntax.Token, y_ starlark.Value, depth int) (bo
 		return i >= j, nil
 	case syntax.GT:
 		return i > 0, nil
+	default:
+		panic(op)
 	}
-	panic(op)
 }
 
 type Map struct {

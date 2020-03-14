@@ -11,10 +11,11 @@ print(s)
 #test = proto.package("starlarkproto.test")
 #test = 1
 test = proto.file("github.com/afking/starlarkproto/testpb/star.proto")
-print("loaded!!!!")
-print(dir(test))
+#print("loaded!!!!")
+#print(dir(test))
 m = test.Message(body="Hello, world!")
 assert.eq(m, m)
+assert.eq(dir(m), ["body", "maps", "nested", "one_number", "one_string", "oneofs", "strings", "type"])
 print(m)
 assert.eq(m.body, "Hello, world!")
 
@@ -73,6 +74,17 @@ m.nested = None
 m.maps = {
 	"hello": struct(body = "world!", type = "GREETING"),
 }
+print(m)
+
+# Oneofs
+m.one_string = "one dream"
+assert.eq(m.one_string, "one dream")
+assert.eq(m.one_number, 0)
+assert.eq(m.oneofs, "one dream")
+m.one_number = 1
+assert.eq(m.one_string, "")
+assert.eq(m.one_number, 1)
+assert.eq(m.oneofs, 1)
 print(m)
 
 # Marshal/Unmarshal

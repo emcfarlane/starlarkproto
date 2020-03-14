@@ -236,7 +236,12 @@ func (d *Descriptor) AttrNames() []string {
 			names = append(names, string(md.Name()))
 		}
 
-		// TODO: oneofs
+		ods := v.Oneofs()
+		for i := 0; i < ods.Len(); i++ {
+			od := ods.Get(i)
+			names = append(names, string(od.Name()))
+		}
+
 		// TODO: extensions
 	}
 	sort.Strings(names)
@@ -479,8 +484,6 @@ func (m *Message) mutable(fd protoreflect.FieldDescriptor) protoreflect.Value {
 	return m.msg.Get(fd)
 }
 
-//func FromKeywords(md protoreflect.MessageDescriptor, kwargs []starlark.Tuple) (*Message, error) {
-//func FromKeywords(msg protoreflect.Message, kwargs []starlark.Tuple) (*Message, error) {
 func NewMessage(msg protoreflect.Message, args starlark.Tuple, kwargs []starlark.Tuple) (*Message, error) {
 	hasArgs := len(args) > 0
 	hasKwargs := len(kwargs) > 0
@@ -580,24 +583,34 @@ func (x *Message) Binary(op syntax.Token, y starlark.Value, side starlark.Side) 
 func (m *Message) AttrNames() []string {
 	desc := m.msg.Descriptor()
 	fds := desc.Fields()
-	names := make([]string, fds.Len())
-	for i := range names {
+	ods := desc.Oneofs()
+	names := make([]string, fds.Len()+ods.Len())
+	for i := 0; i < fds.Len(); i++ {
 		fd := fds.Get(i)
 		names[i] = string(fd.Name())
-
 	}
-	sort.Strings(names)
+	offset := fds.Len()
+	for i := 0; i < ods.Len(); i++ {
+		od := ods.Get(i)
+		names[offset+i] = string(od.Name())
+	}
+	sort.Strings(names) // TODO: sort by protobuf number
 	return names
 }
 
 func (m *Message) fieldDesc(name string) (protoreflect.FieldDescriptor, error) {
 	desc := m.msg.Descriptor()
-	fd := desc.Fields().ByName(protoreflect.Name(name))
-	if fd == nil {
-		return nil, starlark.NoSuchAttrError(
-			fmt.Sprintf("%s has no .%s attribute", desc.Name(), name))
+	if fd := desc.Fields().ByName(protoreflect.Name(name)); fd != nil {
+		return fd, nil
 	}
-	return fd, nil
+
+	if od := desc.Oneofs().ByName(protoreflect.Name(name)); od != nil {
+		return m.msg.WhichOneof(od), nil
+	}
+
+	return nil, starlark.NoSuchAttrError(
+		fmt.Sprintf("%s has no .%s attribute", desc.Name(), name),
+	)
 }
 
 func (m *Message) SetField(name string, val starlark.Value) error {

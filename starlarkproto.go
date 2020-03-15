@@ -85,7 +85,7 @@ func (p *starproto) unmarshal(thread *starlark.Thread, b *starlark.Builtin, args
 	var str string
 	var msg *Message
 	options := proto.UnmarshalOptions{
-		Resolver: &p.types,
+		Resolver: &p.types, // TODO: types...
 	}
 	if err := starlark.UnpackPositionalArgs(
 		"proto.unmarshal", args, kwargs, 2, &str, &msg,
@@ -104,12 +104,14 @@ func (p *starproto) unmarshal(thread *starlark.Thread, b *starlark.Builtin, args
 
 type Descriptor struct {
 	desc protoreflect.Descriptor
-	//attrs map[string]
+
+	frozen bool
+	attrs  map[string]protoreflect.Descriptor
 }
 
 func (d *Descriptor) String() string        { return string(d.desc.Name()) }
 func (d *Descriptor) Type() string          { return "proto.desc" }
-func (d *Descriptor) Freeze()               {}
+func (d *Descriptor) Freeze()               { d.frozen = true }
 func (d *Descriptor) Truth() starlark.Bool  { return d.desc != nil }
 func (d *Descriptor) Hash() (uint32, error) { return 0, fmt.Errorf("unhashable type: proto.desc") }
 func (d *Descriptor) Name() string          { return string(d.desc.Name()) } // TODO
@@ -119,7 +121,6 @@ func (d *Descriptor) CallInternal(thread *starlark.Thread, args starlark.Tuple, 
 		return nil, fmt.Errorf("proto: file descriptor not callable")
 
 	case protoreflect.EnumDescriptor:
-		// TODO: unreachable?
 		if len(kwargs) > 0 {
 			return nil, fmt.Errorf("unexpected kwargs")
 		}
@@ -138,111 +139,87 @@ func (d *Descriptor) CallInternal(thread *starlark.Thread, args starlark.Tuple, 
 	}
 }
 
-// TODO: can this just use the resolver?
-func (d *Descriptor) Attr(name string) (starlark.Value, error) {
-	// TODO: cache?
+func (d *Descriptor) getAttrs() map[string]protoreflect.Descriptor {
+	if d.attrs != nil {
+		return d.attrs
+	}
+	m := make(map[string]protoreflect.Descriptor)
+
 	switch v := d.desc.(type) {
 	case protoreflect.FileDescriptor:
-		eds := v.Enums()
-		for i := 0; i < eds.Len(); i++ {
+		for i, eds := 0, v.Enums(); i < eds.Len(); i++ {
 			ed := eds.Get(i)
-			if string(ed.Name()) == name {
-				return &Descriptor{desc: ed}, nil
-			}
+			m[string(ed.Name())] = ed
 		}
-
-		mds := v.Messages()
-		for i := 0; i < mds.Len(); i++ {
+		for i, mds := 0, v.Messages(); i < mds.Len(); i++ {
 			md := mds.Get(i)
-			if string(md.Name()) == name {
-				return &Descriptor{desc: md}, nil
-			}
+			m[string(md.Name())] = md
 		}
-		return nil, nil
+		for i, eds := 0, v.Extensions(); i < eds.Len(); i++ {
+			ed := eds.Get(i)
+			m[string(ed.Name())] = ed
+		}
+		for i, sds := 0, v.Services(); i < sds.Len(); i++ {
+			sd := sds.Get(i)
+			m[string(sd.Name())] = sd
+		}
 
 	case protoreflect.EnumDescriptor:
-		evdesc := v.Values().ByName(protoreflect.Name(name))
-		if evdesc == nil {
-			return nil, fmt.Errorf("proto: enum not found")
+		for i, eds := 0, v.Values(); i < eds.Len(); i++ {
+			evd := eds.Get(i)
+			m[string(evd.Name())] = evd
 		}
-		return Enum{edesc: evdesc}, nil
-		//vals.ByName
-		//for i := 0; i < vals.Len(); i++ {
-		//	evdesc := vals.Get(i)
-		//	evdesc.
-		//	if string(evdesc.Name()) == name {
-		//		return &Descriptor{desc: evdesc}, nil
-		//	}
-		//}
-		//return nil, nil
 
 	case protoreflect.MessageDescriptor:
-		eds := v.Enums()
-		for i := 0; i < eds.Len(); i++ {
+		for i, eds := 0, v.Enums(); i < eds.Len(); i++ {
 			ed := eds.Get(i)
-			if string(ed.Name()) == name {
-				return &Descriptor{desc: ed}, nil
-			}
+			m[string(ed.Name())] = ed
 		}
-		mds := v.Messages()
-		for i := 0; i < mds.Len(); i++ {
+		for i, mds := 0, v.Messages(); i < mds.Len(); i++ {
 			md := mds.Get(i)
-			if string(md.Name()) == name {
-				return &Descriptor{desc: md}, nil
-			}
+			m[string(md.Name())] = md
 		}
-		return nil, nil
+		for i, ods := 0, v.Oneofs(); i < ods.Len(); i++ {
+			od := ods.Get(i)
+			m[string(od.Name())] = od
+		}
+
+	case protoreflect.ServiceDescriptor:
+		for i, mds := 0, v.Methods(); i < mds.Len(); i++ {
+			md := mds.Get(i)
+			m[string(md.Name())] = md
+		}
 
 	default:
-		return nil, fmt.Errorf("proto: desc missing attr type %T", v)
+		panic(fmt.Sprintf("proto: desc missing attr type %T", v))
+	}
+
+	if !d.frozen {
+		d.attrs = m
+	}
+	return m
+}
+
+func (d *Descriptor) Attr(name string) (starlark.Value, error) {
+	// TODO: can this just use the resolver?
+	attrs := d.getAttrs()
+	desc, ok := attrs[name]
+	if !ok {
+		return nil, nil
+	}
+	// Special descriptor type handling
+	switch v := desc.(type) {
+	case protoreflect.EnumValueDescriptor:
+		return Enum{edesc: v}, nil
+	default:
+		return &Descriptor{desc: desc}, nil
 	}
 }
 
 func (d *Descriptor) AttrNames() []string {
 	var names []string
-	switch v := d.desc.(type) {
-	case protoreflect.FileDescriptor:
-		eds := v.Enums()
-		for i := 0; i < eds.Len(); i++ {
-			ed := eds.Get(i)
-			names = append(names, string(ed.Name()))
-		}
-
-		mds := v.Messages()
-		for i := 0; i < mds.Len(); i++ {
-			md := mds.Get(i)
-			names = append(names, string(md.Name()))
-		}
-
-		// TODO: extensions
-
-	case protoreflect.EnumDescriptor:
-		vals := v.Values()
-		for i := 0; i < vals.Len(); i++ {
-			evdesc := vals.Get(i)
-			names = append(names, string(evdesc.Name()))
-		}
-
-	case protoreflect.MessageDescriptor:
-		eds := v.Enums()
-		for i := 0; i < eds.Len(); i++ {
-			ed := eds.Get(i)
-			names = append(names, string(ed.Name()))
-		}
-
-		mds := v.Messages()
-		for i := 0; i < mds.Len(); i++ {
-			md := mds.Get(i)
-			names = append(names, string(md.Name()))
-		}
-
-		ods := v.Oneofs()
-		for i := 0; i < ods.Len(); i++ {
-			od := ods.Get(i)
-			names = append(names, string(od.Name()))
-		}
-
-		// TODO: extensions
+	for name := range d.getAttrs() {
+		names = append(names, name)
 	}
 	sort.Strings(names)
 	return names
@@ -338,6 +315,7 @@ func starToProto(v starlark.Value, fd protoreflect.FieldDescriptor, val *protore
 			*val = protoreflect.ValueOfBool(bool(b))
 			return nil
 		}
+
 	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind:
 		if x, ok := v.(starlark.Int); ok {
 			v, _ := x.Int64()
@@ -559,8 +537,8 @@ func (m *Message) String() string {
 	buf.WriteString(string(desc.Name()))
 
 	buf.WriteByte('(')
-	fds := desc.Fields()
 	if m.msg.IsValid() {
+		fds := desc.Fields()
 		for i := 0; i < fds.Len(); i++ {
 			if i > 0 {
 				buf.WriteString(", ")
@@ -569,9 +547,6 @@ func (m *Message) String() string {
 			buf.WriteString(string(fd.Name()))
 			buf.WriteString(" = ")
 			val := m.get(fd)
-
-			// Method here should always be get?
-
 			v := protoToStar(val, fd)
 			buf.WriteString(v.String())
 		}
@@ -878,7 +853,7 @@ func (x Enum) CompareSameType(op syntax.Token, y_ starlark.Value, depth int) (bo
 	case syntax.GE:
 		return i >= j, nil
 	case syntax.GT:
-		return i > 0, nil
+		return i > j, nil
 	default:
 		panic(op)
 	}

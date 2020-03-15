@@ -228,6 +228,9 @@ func (d *Descriptor) AttrNames() []string {
 // Message represents a proto.Message as a starlark.Value.
 type Message struct {
 	msg protoreflect.Message
+
+	frozen bool
+	refs   map[protoreflect.Name]starlark.Value // mutable live references
 }
 
 // ProtoReflect implements proto.Message
@@ -280,24 +283,15 @@ func protoToStar(v protoreflect.Value, fd protoreflect.FieldDescriptor) starlark
 		}
 		return Enum{edesc: evdesc}
 	case protoreflect.List:
-		// TODO: freeze
-		if !v.IsValid() {
-			return starlark.None
-		}
 		return &List{
 			list: v,
 			fd:   fd,
 		}
 	case protoreflect.Message:
-		// TODO: freeze
 		return &Message{
 			msg: v,
 		}
 	case protoreflect.Map:
-		// TODO: freeze
-		if !v.IsValid() {
-			return starlark.None
-		}
 		return &Map{
 			m:     v,
 			keyfd: fd.MapKey(),
@@ -464,19 +458,38 @@ func starToProto(v starlark.Value, fd protoreflect.FieldDescriptor, val *protore
 	return fmt.Errorf("proto: unknown type conversion %s", v.Type())
 }
 
-func (m *Message) get(fd protoreflect.FieldDescriptor) protoreflect.Value {
-	return m.msg.Get(fd)
+func (m *Message) get(fd protoreflect.FieldDescriptor) starlark.Value {
+	return protoToStar(m.msg.Get(fd), fd)
 }
 
-func (m *Message) mutable(fd protoreflect.FieldDescriptor) protoreflect.Value {
-	// TODO: oneof handling?
+func (m *Message) isMutableType(fd protoreflect.FieldDescriptor) bool {
 	if fd.IsMap() || fd.IsList() {
-		return m.msg.Mutable(fd)
+		if m.refs == nil {
+			m.refs = make(map[protoreflect.Name]starlark.Value)
+		}
+		if _, ok := m.refs[fd.Name()]; !ok {
+			m.refs[fd.Name()] = protoToStar(m.msg.Mutable(fd), fd)
+		}
+		return true
 	}
-	if fd.Kind() == protoreflect.MessageKind && m.msg.Has(fd) {
-		return m.msg.Mutable(fd)
+	return fd.Kind() == protoreflect.MessageKind && m.msg.Has(fd)
+}
+
+func (m *Message) mutable(fd protoreflect.FieldDescriptor) starlark.Value {
+	if m.isMutableType(fd) {
+		return m.refs[fd.Name()] // SetField creates reference
 	}
-	return m.msg.Get(fd)
+	return m.get(fd)
+}
+
+func (m *Message) checkMutable(verb string) error {
+	if m.frozen {
+		return fmt.Errorf("cannot %s frozen message", verb)
+	}
+	if !m.msg.IsValid() {
+		return fmt.Errorf("cannot %s non mutable message", verb)
+	}
+	return nil
 }
 
 func NewMessage(msg protoreflect.Message, args starlark.Tuple, kwargs []starlark.Tuple) (*Message, error) {
@@ -546,8 +559,7 @@ func (m *Message) String() string {
 			fd := fds.Get(i)
 			buf.WriteString(string(fd.Name()))
 			buf.WriteString(" = ")
-			val := m.get(fd)
-			v := protoToStar(val, fd)
+			v := m.get(fd)
 			buf.WriteString(v.String())
 		}
 	} else {
@@ -563,7 +575,12 @@ func (m *Message) Hash() (uint32, error) {
 	return 0, fmt.Errorf("unhashable type: proto.message")
 }
 func (m *Message) Freeze() {
-	// TODO: freezing...
+	if !m.frozen {
+		m.frozen = true
+		for _, v := range m.refs {
+			v.Freeze()
+		}
+	}
 }
 
 // Attr returns the value of the specified field.
@@ -572,9 +589,7 @@ func (m *Message) Attr(name string) (starlark.Value, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	pv := m.mutable(fd) // Attr can mutate
-	return protoToStar(pv, fd), nil
+	return m.mutable(fd), nil // attr can mutate
 }
 
 func (x *Message) Binary(op syntax.Token, y starlark.Value, side starlark.Side) (starlark.Value, error) {
@@ -616,8 +631,8 @@ func (m *Message) fieldDesc(name string) (protoreflect.FieldDescriptor, error) {
 }
 
 func (m *Message) SetField(name string, val starlark.Value) error {
-	if !m.msg.IsValid() {
-		return fmt.Errorf("proto.message: can't mutate")
+	if err := m.checkMutable("set field"); err != nil {
+		return err
 	}
 	fd, err := m.fieldDesc(name)
 	if err != nil {
@@ -635,6 +650,12 @@ func (m *Message) SetField(name string, val starlark.Value) error {
 	}
 
 	m.msg.Set(fd, v)
+	if m.isMutableType(fd) {
+		if m.refs == nil {
+			m.refs = make(map[protoreflect.Name]starlark.Value)
+		}
+		m.refs[fd.Name()] = protoToStar(v, fd) // TODO: avoid starlark.Value copy
+	}
 	return nil
 }
 
@@ -688,6 +709,7 @@ type List struct {
 
 	frozen    bool
 	itercount uint32
+	refs      []starlark.Value // mirrors list on mutable types
 }
 
 func (l *List) Attr(name string) (starlark.Value, error) { return bindAttr(l, name, listMethods) }
@@ -696,21 +718,27 @@ func (l *List) AttrNames() []string                      { return builtinAttrNam
 func (l *List) String() string {
 	buf := new(strings.Builder)
 	buf.WriteByte('[')
-	for i := 0; i < l.Len(); i++ {
-		if i > 0 {
-			buf.WriteString(", ")
+	if l.list.IsValid() {
+		for i := 0; i < l.Len(); i++ {
+			if i > 0 {
+				buf.WriteString(", ")
+			}
+			buf.WriteString(l.Index(i).String())
 		}
-		buf.WriteString(l.Index(i).String())
 	}
 	buf.WriteByte(']')
 	return buf.String()
 }
 
+func (l *List) isMutableType() bool {
+	return l.fd.Kind() == protoreflect.MessageKind
+}
+
 func (l *List) Freeze() {
 	if !l.frozen {
 		l.frozen = true
-		for i := 0; i < l.Len(); i++ {
-			l.Index(i).Freeze()
+		for _, v := range l.refs {
+			v.Freeze()
 		}
 	}
 }
@@ -726,22 +754,28 @@ func (l *List) checkMutable(verb string) error {
 	if l.itercount > 0 {
 		return fmt.Errorf("cannot %s list during iteration", verb)
 	}
+	if !l.list.IsValid() {
+		return fmt.Errorf("cannot %s non mutable list", verb)
+	}
 	return nil
 }
 
 func (l *List) Index(i int) starlark.Value {
+	if i < len(l.refs) {
+		return l.refs[i] // mutable refs
+	}
 	return protoToStar(l.list.Get(i), l.fd)
 }
 
 type listIterator struct {
-	l *List
-	i int
+	l    *List
+	vals []starlark.Value
+	i    int
 }
 
 func (it *listIterator) Next(p *starlark.Value) bool {
-	if it.i < it.l.Len() {
-		val := it.l.list.Get(it.i)
-		*p = protoToStar(val, it.l.fd)
+	if it.i < len(it.vals) {
+		*p = it.vals[it.i]
 		it.i++
 		return true
 	}
@@ -758,7 +792,15 @@ func (l *List) Iterate() starlark.Iterator {
 	if !l.frozen {
 		l.itercount++
 	}
-	return &listIterator{l: l}
+	if len(l.refs) > 0 {
+		return &listIterator{l: l, vals: l.refs}
+	}
+	vals := make([]starlark.Value, l.list.Len())
+	for i := 0; i < l.list.Len(); i++ {
+		val := l.list.Get(i)
+		vals[i] = protoToStar(val, l.fd)
+	}
+	return &listIterator{l: l, vals: vals}
 }
 
 func (l *List) Type() string         { return l.fd.Kind().String() }
@@ -776,6 +818,9 @@ func (l *List) SetIndex(i int, v starlark.Value) error {
 	}
 
 	l.list.Set(i, val)
+	if l.isMutableType() {
+		l.refs[i] = protoToStar(val, l.fd)
+	}
 	return nil
 }
 
@@ -799,7 +844,11 @@ func (l *List) Append(v starlark.Value) error {
 	if err := starToProto(v, l.fd, &val); err != nil {
 		return err
 	}
+
 	l.list.Append(val)
+	if l.isMutableType() {
+		l.refs = append(l.refs, protoToStar(val, l.fd))
+	}
 	return nil
 }
 
@@ -866,6 +915,7 @@ type Map struct {
 
 	frozen    bool
 	itercount uint32
+	refs      map[interface{}]starlark.Value // interface{} == protobuf.MapKey.Interface()
 }
 
 func (m *Map) Clear() error {
@@ -873,32 +923,46 @@ func (m *Map) Clear() error {
 		m.m.Clear(key)
 		return true
 	})
+	m.refs = nil // TODO: iterate?
 	return nil
 }
-func (m *Map) Delete(k starlark.Value) (v starlark.Value, found bool, err error) {
+func (m *Map) parseKey(k starlark.Value) (protoreflect.MapKey, error) {
 	var keyval protoreflect.Value
 	if err := starToProto(k, m.keyfd, &keyval); err != nil {
-		return nil, false, err
+		return protoreflect.MapKey{}, err
 	}
-	key := keyval.MapKey()
+	return keyval.MapKey(), nil
+}
+func (m *Map) get(key protoreflect.MapKey) (starlark.Value, bool) {
+	if m.isMutableType() && m.m.Has(key) {
+		return m.refs[key.Interface()], true
+	}
 	val := m.m.Get(key)
 	if !val.IsValid() {
-		return starlark.None, false, nil
+		return starlark.None, false
 	}
-	m.m.Clear(key)
-	return protoToStar(val, m.valfd), true, nil
+	return protoToStar(val, m.valfd), true
+}
+func (m *Map) Delete(k starlark.Value) (v starlark.Value, found bool, err error) {
+	key, err := m.parseKey(k)
+	if err != nil {
+		return nil, false, err
+	}
+
+	v, found = m.get(key)
+	if found {
+		m.m.Clear(key)
+	}
+	return v, found, nil
 }
 func (m *Map) Get(k starlark.Value) (v starlark.Value, found bool, err error) {
-	var keyval protoreflect.Value
-	if err := starToProto(k, m.keyfd, &keyval); err != nil {
+	key, err := m.parseKey(k)
+	if err != nil {
 		return nil, false, err
 	}
-	key := keyval.MapKey()
-	val := m.m.Get(key)
-	if !val.IsValid() {
-		return starlark.None, false, nil
-	}
-	return protoToStar(val, m.valfd), true, nil
+
+	v, found = m.get(key)
+	return v, found, nil
 }
 
 type byTuple []starlark.Tuple
@@ -916,13 +980,22 @@ func (a byTuple) Less(i, j int) bool {
 
 func (m *Map) Items() []starlark.Tuple {
 	v := make([]starlark.Tuple, 0, m.Len())
-	m.m.Range(func(key protoreflect.MapKey, val protoreflect.Value) bool {
-		v = append(v, starlark.Tuple{
-			protoToStar(key.Value(), m.keyfd),
-			protoToStar(val, m.valfd),
+	if m.isMutableType() {
+		for key, val := range m.refs {
+			v = append(v, starlark.Tuple{
+				protoToStar(protoreflect.ValueOf(key), m.keyfd),
+				val,
+			})
+		}
+	} else {
+		m.m.Range(func(key protoreflect.MapKey, val protoreflect.Value) bool {
+			v = append(v, starlark.Tuple{
+				protoToStar(key.Value(), m.keyfd),
+				protoToStar(val, m.valfd),
+			})
+			return true
 		})
-		return true
-	})
+	}
 	sort.Sort(byTuple(v))
 	return v
 }
@@ -942,10 +1015,18 @@ func (a byValue) Less(i, j int) bool {
 
 func (m *Map) Keys() []starlark.Value {
 	v := make([]starlark.Value, 0, m.Len())
-	m.m.Range(func(key protoreflect.MapKey, _ protoreflect.Value) bool {
-		v = append(v, protoToStar(key.Value(), m.keyfd))
-		return true
-	})
+	if m.isMutableType() {
+		for key := range m.refs {
+			v = append(
+				v, protoToStar(protoreflect.ValueOf(key), m.keyfd),
+			)
+		}
+	} else {
+		m.m.Range(func(key protoreflect.MapKey, _ protoreflect.Value) bool {
+			v = append(v, protoToStar(key.Value(), m.keyfd))
+			return true
+		})
+	}
 	sort.Sort(byValue(v))
 	return v
 }
@@ -955,7 +1036,7 @@ func (m *Map) Len() int {
 
 type keyIterator struct {
 	m    *Map
-	keys []starlark.Value
+	keys []starlark.Value // copy
 	i    int
 }
 
@@ -981,6 +1062,9 @@ func (m *Map) Iterate() starlark.Iterator {
 	return &keyIterator{m: m, keys: m.Keys()}
 }
 func (m *Map) SetKey(k, v starlark.Value) error {
+	if err := m.checkMutable("set"); err != nil {
+		return err
+	}
 	var keyval protoreflect.Value
 	if err := starToProto(k, m.keyfd, &keyval); err != nil {
 		return err
@@ -992,39 +1076,60 @@ func (m *Map) SetKey(k, v starlark.Value) error {
 		return err
 	}
 	m.m.Set(key, val)
+	if m.isMutableType() {
+		m.refs[k] = protoToStar(val, m.valfd) // TODO: fix starlark value loss
+	}
 	return nil
 }
 func (m *Map) String() string {
 	buf := new(strings.Builder)
 	buf.WriteByte('{')
-	for i, item := range m.Items() {
-		if i > 0 {
-			buf.WriteString(", ")
-		}
-		k, v := item[0], item[1]
+	if m.m.IsValid() {
+		for i, item := range m.Items() {
+			if i > 0 {
+				buf.WriteString(", ")
+			}
+			k, v := item[0], item[1]
 
-		buf.WriteString(k.String())
-		buf.WriteString(": ")
-		buf.WriteString(v.String())
+			buf.WriteString(k.String())
+			buf.WriteString(": ")
+			buf.WriteString(v.String())
+		}
 	}
 	buf.WriteByte('}')
 	return buf.String()
 }
-func (m *Map) Type() string {
-	return "TODO"
+func (m *Map) Type() string { return "proto.map" } // TODO
+func (m *Map) isMutableType() bool {
+	isMutable := m.valfd.Kind() == protoreflect.MessageKind
+	if isMutable && m.refs == nil && !m.frozen {
+		m.refs = make(map[interface{}]starlark.Value) // lazy init
+	}
+	return isMutable
 }
 func (m *Map) Freeze() {
 	if !m.frozen {
 		m.frozen = true
-		// TODO: keys are immutable
-		//       values need checking...
+		for _, v := range m.refs {
+			v.Freeze()
+		}
 	}
 }
 func (m *Map) Truth() starlark.Bool  { return m.Len() > 0 }
 func (m *Map) Hash() (uint32, error) { return 0, fmt.Errorf("unhashable type: map") }
-func (m *Map) Attr(name string) (starlark.Value, error) {
-	return nil, nil
-}
-func (m *Map) AttrNames() []string {
+func (m *Map) checkMutable(verb string) error {
+	if m.frozen {
+		return fmt.Errorf("cannot %s frozen map", verb)
+	}
+	if m.itercount > 0 {
+		return fmt.Errorf("cannot %s map during iteration", verb)
+	}
 	return nil
 }
+
+//func (m *Map) Attr(name string) (starlark.Value, error) {
+//	return nil, nil
+//}
+//func (m *Map) AttrNames() []string {
+//	return nil
+//}

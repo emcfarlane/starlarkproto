@@ -58,10 +58,6 @@ b.append("hello")
 assert.eq(m.strings[0], "hello")
 print(m)
 
-# Structs init on attr
-#m.nested.body = "nested"
-#assert.eq(m.nested.body, "nested")
-
 # Message can be created from structs
 m.nested = struct(body = "struct", type = "GREETING")
 assert.eq(m.nested.body, "struct")
@@ -72,6 +68,7 @@ print(m)
 m.nested = None
 #assert.eq(m.nested, test.Message(None))  # None creates typed nil
 assert.true(not m.nested, msg="Nil RO type is falsy")  # 
+assert.eq(m.nested.nested.body, "")  # Recursive nil returns default types
 
 # Maps shallow copy Dicts on set
 m.maps = {

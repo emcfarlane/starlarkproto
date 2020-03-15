@@ -49,6 +49,8 @@ m.type = "GREETING"
 assert.eq(m.type, message_greeting)
 m.type = 0
 assert.eq(m.type, message_unknown)
+m.type = message_greeting
+assert.eq(m.type, message_greeting)
 
 # Lists are references
 b = m.strings
@@ -57,8 +59,8 @@ assert.eq(m.strings[0], "hello")
 print(m)
 
 # Structs init on attr
-m.nested.body = "nested"
-assert.eq(m.nested.body, "nested")
+#m.nested.body = "nested"
+#assert.eq(m.nested.body, "nested")
 
 # Message can be created from structs
 m.nested = struct(body = "struct", type = "GREETING")
@@ -68,9 +70,10 @@ print(m)
 
 # Messages can be assigned None to delete
 m.nested = None
-#assert.eq(m.nested, None)
+#assert.eq(m.nested, test.Message(None))  # None creates typed nil
+assert.true(not m.nested, msg="Nil RO type is falsy")  # 
 
-# Maps init copy dicts
+# Maps shallow copy Dicts on set
 m.maps = {
 	"hello": struct(body = "world!", type = "GREETING"),
 }

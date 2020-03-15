@@ -313,9 +313,6 @@ func protoToStar(v protoreflect.Value, fd protoreflect.FieldDescriptor) starlark
 		}
 	case protoreflect.Message:
 		// TODO: freeze
-		if !v.IsValid() {
-			return starlark.None
-		}
 		return &Message{
 			msg: v,
 		}
@@ -411,11 +408,27 @@ func starToProto(v starlark.Value, fd protoreflect.FieldDescriptor, val *protore
 			}
 			*val = protoreflect.ValueOfEnum(protoreflect.EnumNumber(int32(x)))
 			return nil
+
+		case Enum:
+			if a, b := v.edesc.Parent().FullName(), fd.Enum().FullName(); a != b {
+				return fmt.Errorf("proto: enum type mismatch %s != %s", a, b)
+			}
+			*val = protoreflect.ValueOfEnum(v.edesc.Number())
+			return nil
 		}
 
 	case protoreflect.MessageKind:
 		if fd.IsMap() {
-			//mval := parent.NewField(fd)
+			//switch v := v.(type) {
+			//case *Map:
+			//	// TODO: maps just need the same type?
+			//	*val = protoreflect.ValueOfMap(v.m)
+
+			//case starlark.IterableMapping:
+			v, ok := v.(starlark.IterableMapping)
+			if !ok {
+				break
+			}
 			mm := val.Map()
 			kfd := fd.MapKey()
 			vfd := fd.MapValue()
@@ -441,11 +454,12 @@ func starToProto(v starlark.Value, fd protoreflect.FieldDescriptor, val *protore
 				mm.Set(mkey, vval)
 			}
 			return nil
+			//}
+			//break
 		}
 
 		switch v := v.(type) {
 		case *starlarkstruct.Struct:
-			//msg := dynamicpb.NewMessage(fd.Message())
 			msg := val.Message()
 			m := &Message{msg: msg} // wrap for set
 
@@ -460,7 +474,6 @@ func starToProto(v starlark.Value, fd protoreflect.FieldDescriptor, val *protore
 				}
 			}
 			return nil
-			//return protoreflect.ValueOfMessage(msg), nil
 
 		default:
 			fmt.Println("undefined message kind")
@@ -478,7 +491,11 @@ func (m *Message) get(fd protoreflect.FieldDescriptor) protoreflect.Value {
 }
 
 func (m *Message) mutable(fd protoreflect.FieldDescriptor) protoreflect.Value {
-	if fd.IsMap() || fd.IsList() || fd.Kind() == protoreflect.MessageKind {
+	// TODO: oneof handling?
+	if fd.IsMap() || fd.IsList() {
+		return m.msg.Mutable(fd)
+	}
+	if fd.Kind() == protoreflect.MessageKind && m.msg.Has(fd) {
 		return m.msg.Mutable(fd)
 	}
 	return m.msg.Get(fd)
@@ -503,6 +520,12 @@ func NewMessage(msg protoreflect.Message, args starlark.Tuple, kwargs []starlark
 	if hasArgs {
 		arg, ok := args[0].(starlark.HasAttrs)
 		if !ok {
+			// None creates a RO zero type.
+			if arg := args[0]; arg == starlark.None {
+				m.msg = msg.Type().Zero()
+				fmt.Println("ZERO VAL :(", m.msg.IsValid())
+				return m, nil
+			}
 			return nil, fmt.Errorf("arg has no attributes")
 		}
 
@@ -537,26 +560,30 @@ func (m *Message) String() string {
 
 	buf.WriteByte('(')
 	fds := desc.Fields()
-	for i := 0; i < fds.Len(); i++ {
-		if i > 0 {
-			buf.WriteString(", ")
+	if m.msg.IsValid() {
+		for i := 0; i < fds.Len(); i++ {
+			if i > 0 {
+				buf.WriteString(", ")
+			}
+			fd := fds.Get(i)
+			buf.WriteString(string(fd.Name()))
+			buf.WriteString(" = ")
+			val := m.get(fd)
+
+			// Method here should always be get?
+
+			v := protoToStar(val, fd)
+			buf.WriteString(v.String())
 		}
-		fd := fds.Get(i)
-		buf.WriteString(string(fd.Name()))
-		buf.WriteString(" = ")
-		val := m.get(fd)
-
-		// Method here should always be get?
-
-		v := protoToStar(val, fd)
-		buf.WriteString(v.String())
+	} else {
+		buf.WriteString("None")
 	}
 	buf.WriteByte(')')
 	return buf.String()
 }
 
 func (m *Message) Type() string         { return "proto" }
-func (m *Message) Truth() starlark.Bool { return true }
+func (m *Message) Truth() starlark.Bool { return starlark.Bool(m.msg.IsValid()) }
 func (m *Message) Hash() (uint32, error) {
 	return 0, fmt.Errorf("unhashable type: proto.message")
 }
@@ -614,6 +641,9 @@ func (m *Message) fieldDesc(name string) (protoreflect.FieldDescriptor, error) {
 }
 
 func (m *Message) SetField(name string, val starlark.Value) error {
+	if !m.msg.IsValid() {
+		return fmt.Errorf("proto.message: can't mutate")
+	}
 	fd, err := m.fieldDesc(name)
 	if err != nil {
 		return err
@@ -801,9 +831,6 @@ func (l *List) Append(v starlark.Value) error {
 // Enum is the type of a protobuf enum.
 type Enum struct {
 	edesc protoreflect.EnumValueDescriptor
-	//i   int32
-	//str string // string representation
-	//typ string
 }
 
 func NewEnum(enum protoreflect.EnumValueDescriptors, arg starlark.Value) (Enum, error) {

@@ -15,5 +15,6 @@ greeting = test.Message.Type.GREETING
 print(greeting)  # GREETING
 
 data = proto.marshal(m) # Byte encoded string
-proto.unmarshal(data, m1) # Unmarshal back to message
+m2 = test.Message()
+proto.unmarshal(data, m2) # Unmarshal back to message
 ```

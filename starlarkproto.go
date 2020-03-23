@@ -15,28 +15,29 @@ import (
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
-//func NewModule(files *protoregistry.Files) *starlarkstruct.Module {
 func NewModule(resolver protodesc.Resolver) *starlarkstruct.Module {
-	p := &starproto{resolver: resolver}
-
+	p := NewProto(resolver)
 	return &starlarkstruct.Module{
 		Name: "proto",
 		Members: starlark.StringDict{
-			"file":      starlark.NewBuiltin("proto.file", p.file),
-			"new":       starlark.NewBuiltin("proto.new", p.new),
-			"marshal":   starlark.NewBuiltin("proto.marshal", p.marshal),
-			"unmarshal": starlark.NewBuiltin("proto.unmarshal", p.unmarshal),
+			"file":      starlark.NewBuiltin("proto.file", p.File),
+			"new":       starlark.NewBuiltin("proto.new", p.New),
+			"marshal":   starlark.NewBuiltin("proto.marshal", p.Marshal),
+			"unmarshal": starlark.NewBuiltin("proto.unmarshal", p.Unmarshal),
 		},
 	}
 }
 
-type starproto struct {
-	//files *protoregistry.Files
+type Proto struct {
 	resolver protodesc.Resolver
 	types    protoregistry.Types // TODO: wrap resolver to register extensions.
 }
 
-func (p *starproto) file(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+func NewProto(resolver protodesc.Resolver) *Proto {
+	return &Proto{resolver: resolver}
+}
+
+func (p *Proto) File(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var name string
 	if err := starlark.UnpackPositionalArgs("proto.package", args, kwargs, 1, &name); err != nil {
 		return nil, err
@@ -49,7 +50,7 @@ func (p *starproto) file(thread *starlark.Thread, b *starlark.Builtin, args star
 	return &Descriptor{desc: fileDesc}, nil
 }
 
-func (p *starproto) new(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+func (p *Proto) New(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var name string
 	if err := starlark.UnpackPositionalArgs("proto.package", args, kwargs, 1, &name); err != nil {
 		return nil, err
@@ -63,7 +64,7 @@ func (p *starproto) new(thread *starlark.Thread, b *starlark.Builtin, args starl
 	return &Descriptor{desc: desc}, nil
 }
 
-func (p *starproto) marshal(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+func (p *Proto) Marshal(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var msg *Message
 	var options proto.MarshalOptions
 	if err := starlark.UnpackPositionalArgs(
@@ -81,7 +82,7 @@ func (p *starproto) marshal(thread *starlark.Thread, b *starlark.Builtin, args s
 	return starlark.String(string(data)), nil
 }
 
-func (p *starproto) unmarshal(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+func (p *Proto) Unmarshal(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var str string
 	var msg *Message
 	options := proto.UnmarshalOptions{
@@ -95,7 +96,9 @@ func (p *starproto) unmarshal(thread *starlark.Thread, b *starlark.Builtin, args
 	); err != nil {
 		return nil, err
 	}
-
+	if err := msg.checkMutable("unmarshal"); err != nil {
+		return nil, err
+	}
 	if err := proto.Unmarshal([]byte(str), msg); err != nil {
 		return nil, err
 	}

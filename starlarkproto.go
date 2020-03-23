@@ -128,6 +128,9 @@ type Descriptor struct {
 	attrs  map[string]protoreflect.Descriptor
 }
 
+// Descriptor exports proto.Descriptor
+func (d *Descriptor) Descriptor() protoreflect.Descriptor { return d.desc }
+
 func (d *Descriptor) String() string        { return string(d.desc.Name()) }
 func (d *Descriptor) Type() string          { return "proto.desc" }
 func (d *Descriptor) Freeze()               { d.frozen = true }

@@ -128,6 +128,8 @@ type Descriptor struct {
 	attrs  map[string]protoreflect.Descriptor
 }
 
+func NewDescriptor(desc protoreflect.Descriptor) *Descriptor { return &Descriptor{desc: desc} }
+
 // Descriptor exports proto.Descriptor
 func (d *Descriptor) Descriptor() protoreflect.Descriptor { return d.desc }
 

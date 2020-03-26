@@ -334,36 +334,35 @@ func starToProto(v starlark.Value, fd protoreflect.FieldDescriptor, val *protore
 			return nil
 		}
 	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind:
-		if x, ok := v.(starlark.Int); ok {
-			v, _ := x.Int64()
-			*val = protoreflect.ValueOfInt32(int32(v))
+		if x, err := starlark.AsInt32(v); err == nil {
+			*val = protoreflect.ValueOfInt32(int32(x))
 			return nil
 		}
 	case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind:
-		if x, ok := v.(starlark.Int); ok {
+		if x, err := starlark.NumberToInt(v); err == nil {
 			v, _ := x.Int64()
 			*val = protoreflect.ValueOfInt64(int64(v))
 			return nil
 		}
 	case protoreflect.Uint32Kind, protoreflect.Fixed32Kind:
-		if x, ok := v.(starlark.Int); ok {
+		if x, err := starlark.NumberToInt(v); err == nil {
 			v, _ := x.Uint64()
 			*val = protoreflect.ValueOfUint32(uint32(v))
 			return nil
 		}
 	case protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
-		if x, ok := v.(starlark.Int); ok {
+		if x, err := starlark.NumberToInt(v); err == nil {
 			v, _ := x.Uint64()
 			*val = protoreflect.ValueOfUint64(uint64(v))
 			return nil
 		}
 	case protoreflect.FloatKind:
-		if x, ok := v.(starlark.Float); ok {
+		if x, ok := starlark.AsFloat(v); ok {
 			*val = protoreflect.ValueOfFloat32(float32(x))
 			return nil
 		}
 	case protoreflect.DoubleKind:
-		if x, ok := v.(starlark.Float); ok {
+		if x, ok := starlark.AsFloat(v); ok {
 			*val = protoreflect.ValueOfFloat64(float64(x))
 			return nil
 		}
@@ -472,7 +471,7 @@ func starToProto(v starlark.Value, fd protoreflect.FieldDescriptor, val *protore
 	default:
 		panic(fmt.Sprintf("unknown kind %q", kind))
 	}
-	return fmt.Errorf("proto: unknown type conversion %T %s", v, v.Type())
+	return fmt.Errorf("proto: unknown type conversion %s<%T> to %s", v, v, fd.Kind().String())
 }
 
 func starToProtos(v starlark.Value, fd protoreflect.FieldDescriptor, val *protoreflect.Value) error {

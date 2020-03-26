@@ -75,6 +75,10 @@ m.nested = None
 assert.true(not m.nested, msg="Nil RO type is falsy")  # 
 assert.eq(m.nested.nested.body, "")  # Recursive nil returns default types
 
+# Messages can be assigned Messages
+nested = test.Message(body="nested")
+m.nested = nested
+
 # Maps shallow copy Dicts on set
 m.maps = {
 	"hello": struct(body = "world!", type = "GREETING"),

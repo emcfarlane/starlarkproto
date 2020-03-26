@@ -464,14 +464,15 @@ func starToProto(v starlark.Value, fd protoreflect.FieldDescriptor, val *protore
 			}
 			return nil
 
-		default:
-			fmt.Println("undefined message kind")
+		case *Message:
+			*val = protoreflect.ValueOfMessage(v.msg)
+			return nil
 		}
 
 	default:
 		panic(fmt.Sprintf("unknown kind %q", kind))
 	}
-	return fmt.Errorf("proto: unknown type conversion %s", v.Type())
+	return fmt.Errorf("proto: unknown type conversion %T %s", v, v.Type())
 }
 
 func starToProtos(v starlark.Value, fd protoreflect.FieldDescriptor, val *protoreflect.Value) error {
@@ -628,7 +629,7 @@ func (m *Message) String() string {
 	return buf.String()
 }
 
-func (m *Message) Type() string         { return "proto" }
+func (m *Message) Type() string         { return "proto.message" }
 func (m *Message) Truth() starlark.Bool { return starlark.Bool(m.msg.IsValid()) }
 func (m *Message) Hash() (uint32, error) {
 	return 0, fmt.Errorf("unhashable type: proto.message")

@@ -385,8 +385,12 @@ func starToProto(v starlark.Value, fd protoreflect.FieldDescriptor, val *protore
 			}
 			*val = protoreflect.ValueOfEnum(enumVal.Number())
 			return nil
-		case starlark.Int:
-			x, ok := v.Int64()
+		case starlark.Int, starlark.Float:
+			i, err := starlark.NumberToInt(v)
+			if err != nil {
+				return err
+			}
+			x, ok := i.Int64()
 			if !ok {
 				return fmt.Errorf("proto: enum has no %s value", v)
 			}

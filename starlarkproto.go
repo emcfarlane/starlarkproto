@@ -334,8 +334,12 @@ func starToProto(v starlark.Value, fd protoreflect.FieldDescriptor, val *protore
 			return nil
 		}
 	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind:
-		if x, err := starlark.AsInt32(v); err == nil {
-			*val = protoreflect.ValueOfInt32(int32(x))
+		if x, err := starlark.NumberToInt(v); err == nil {
+			v, err := starlark.AsInt32(x)
+			if err != nil {
+				return err
+			}
+			*val = protoreflect.ValueOfInt32(int32(v))
 			return nil
 		}
 	case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind:

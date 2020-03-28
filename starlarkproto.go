@@ -307,22 +307,59 @@ func protoToStar(v protoreflect.Value, fd protoreflect.FieldDescriptor) starlark
 		}
 		return Enum{edesc: evdesc}
 	case protoreflect.List:
-		return &List{
-			list: v,
-			fd:   fd,
-		}
+		return &List{list: v, fd: fd}
 	case protoreflect.Message:
-		return &Message{
-			msg: v,
-		}
+		return &Message{msg: v}
 	case protoreflect.Map:
-		return &Map{
-			m:     v,
-			keyfd: fd.MapKey(),
-			valfd: fd.MapValue(),
-		}
+		return &Map{m: v, keyfd: fd.MapKey(), valfd: fd.MapValue()}
 	default:
 		panic(fmt.Sprintf("unhandled proto type %s %T", v, v))
+	}
+}
+
+func starToProtoMessage(v starlark.Value, val *protoreflect.Value) error {
+	switch v := v.(type) {
+	case starlark.NoneType:
+		msg := val.Message()
+		*val = protoreflect.ValueOfMessage(msg.Type().Zero()) // RO
+		return nil
+	case *starlarkstruct.Struct:
+		msg := val.Message()
+		m := Message{msg: msg} // wrap for set
+
+		for _, name := range v.AttrNames() {
+			val, err := v.Attr(name)
+			if err != nil {
+				return err
+			}
+			if err := m.SetField(name, val); err != nil {
+				return err
+			}
+		}
+		return nil
+	case starlark.IterableMapping:
+		msg := val.Message()
+		m := Message{msg: msg} // wrap for set
+
+		for _, kv := range v.Items() {
+			key, ok := kv[0].(starlark.String)
+			if !ok {
+				return fmt.Errorf("proto: invalid key type %s", kv[0].Type())
+			}
+			if err := m.SetField(string(key), kv[1]); err != nil {
+				return err
+			}
+		}
+		return nil
+	case *Message:
+		msg := val.Message()
+		if err := equalFullName(msg.Descriptor().FullName(), v.msg.Descriptor().FullName()); err != nil {
+			return err
+		}
+		*val = protoreflect.ValueOfMessage(v.msg)
+		return nil
+	default:
+		return fmt.Errorf("proto: unknown type conversion %s<%T> to proto.message", v, v)
 	}
 }
 
@@ -453,29 +490,7 @@ func starToProto(v starlark.Value, fd protoreflect.FieldDescriptor, val *protore
 			}
 			break
 		}
-
-		switch v := v.(type) {
-		case *starlarkstruct.Struct:
-			msg := val.Message()
-			m := &Message{msg: msg} // wrap for set
-
-			names := v.AttrNames()
-			for _, name := range names {
-				val, err := v.Attr(name)
-				if err != nil {
-					return err
-				}
-				if err := m.SetField(name, val); err != nil {
-					return err
-				}
-			}
-			return nil
-
-		case *Message:
-			*val = protoreflect.ValueOfMessage(v.msg)
-			return nil
-		}
-
+		return starToProtoMessage(v, val)
 	default:
 		panic(fmt.Sprintf("unknown kind %q", kind))
 	}
@@ -576,26 +591,9 @@ func NewMessage(msg protoreflect.Message, args starlark.Tuple, kwargs []starlark
 		msg: msg,
 	}
 	if hasArgs {
-		arg, ok := args[0].(starlark.HasAttrs)
-		if !ok {
-			// None creates a RO zero type.
-			if arg := args[0]; arg == starlark.None {
-				m.msg = msg.Type().Zero()
-				fmt.Println("ZERO VAL :(", m.msg.IsValid())
-				return m, nil
-			}
-			return nil, fmt.Errorf("arg has no attributes")
-		}
-
-		names := arg.AttrNames()
-		for _, name := range names {
-			v, err := arg.Attr(name)
-			if err != nil {
-				return nil, err
-			}
-			if err := m.SetField(name, v); err != nil {
-				return nil, err
-			}
+		val := protoreflect.ValueOfMessage(msg)
+		if err := starToProtoMessage(args[0], &val); err != nil {
+			return nil, err
 		}
 		return m, nil
 	}

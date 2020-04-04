@@ -8,6 +8,8 @@ import (
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"
 	"go.starlark.net/syntax"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/encoding/prototext"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -20,10 +22,14 @@ func NewModule(resolver protodesc.Resolver) *starlarkstruct.Module {
 	return &starlarkstruct.Module{
 		Name: "proto",
 		Members: starlark.StringDict{
-			"file":      starlark.NewBuiltin("proto.file", p.File),
-			"new":       starlark.NewBuiltin("proto.new", p.New),
-			"marshal":   starlark.NewBuiltin("proto.marshal", p.Marshal),
-			"unmarshal": starlark.NewBuiltin("proto.unmarshal", p.Unmarshal),
+			"file":           starlark.NewBuiltin("proto.file", p.File),
+			"new":            starlark.NewBuiltin("proto.new", p.New),
+			"marshal":        starlark.NewBuiltin("proto.marshal", p.Marshal),
+			"unmarshal":      starlark.NewBuiltin("proto.unmarshal", p.Unmarshal),
+			"marshal_json":   starlark.NewBuiltin("proto.marshal_json", p.MarshalJSON),
+			"unmarshal_json": starlark.NewBuiltin("proto.unmarshal_json", p.UnmarshalJSON),
+			"marshal_text":   starlark.NewBuiltin("proto.marshal_text", p.MarshalText),
+			"unmarshal_text": starlark.NewBuiltin("proto.unmarshal_text", p.UnmarshalText),
 		},
 	}
 }
@@ -91,6 +97,90 @@ func (p *Proto) Unmarshal(thread *starlark.Thread, b *starlark.Builtin, args sta
 	if err := starlark.UnpackPositionalArgs(
 		"proto.unmarshal", args, kwargs, 2, &str, &msg,
 		"merge?", &options.Merge,
+		"allow_partial?", &options.AllowPartial,
+		"discard_unknown?", &options.DiscardUnknown,
+	); err != nil {
+		return nil, err
+	}
+	if err := msg.checkMutable("unmarshal"); err != nil {
+		return nil, err
+	}
+	if err := proto.Unmarshal([]byte(str), msg); err != nil {
+		return nil, err
+	}
+	return starlark.None, nil
+}
+
+func (p *Proto) MarshalJSON(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var msg *Message
+	var options protojson.MarshalOptions
+	if err := starlark.UnpackPositionalArgs(
+		"proto.unmarshal_json", args, kwargs, 1, &msg,
+		"multiline?", &options.Multiline,
+		"indent?", &options.Indent,
+		"allow_partial?", &options.AllowPartial,
+		"use_proto_names?", &options.UseProtoNames,
+		"use_enum_numbers?", &options.UseEnumNumbers,
+		"emit_unpopulated?", &options.EmitUnpopulated,
+	); err != nil {
+		return nil, err
+	}
+	data, err := options.Marshal(msg)
+	if err != nil {
+		return nil, err
+	}
+	return starlark.String(string(data)), nil
+}
+
+func (p *Proto) UnmarshalJSON(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var str string
+	var msg *Message
+	options := protojson.UnmarshalOptions{
+		Resolver: &p.types, // TODO: types...
+	}
+	if err := starlark.UnpackPositionalArgs(
+		"proto.unmarshal_json", args, kwargs, 2, &str, &msg,
+		"allow_partial?", &options.AllowPartial,
+		"discard_unknown?", &options.DiscardUnknown,
+	); err != nil {
+		return nil, err
+	}
+	if err := msg.checkMutable("unmarshal"); err != nil {
+		return nil, err
+	}
+	if err := proto.Unmarshal([]byte(str), msg); err != nil {
+		return nil, err
+	}
+	return starlark.None, nil
+}
+
+func (p *Proto) MarshalText(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var msg *Message
+	var options prototext.MarshalOptions
+	if err := starlark.UnpackPositionalArgs(
+		"proto.unmarshal_text", args, kwargs, 1, &msg,
+		"multiline?", &options.Multiline,
+		"indent?", &options.Indent,
+		"allow_partial?", &options.AllowPartial,
+		"emit_unknown?", &options.EmitUnknown,
+	); err != nil {
+		return nil, err
+	}
+	data, err := options.Marshal(msg)
+	if err != nil {
+		return nil, err
+	}
+	return starlark.String(string(data)), nil
+}
+
+func (p *Proto) UnmarshalText(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var str string
+	var msg *Message
+	options := prototext.UnmarshalOptions{
+		Resolver: &p.types, // TODO: types...
+	}
+	if err := starlark.UnpackPositionalArgs(
+		"proto.unmarshal_text", args, kwargs, 2, &str, &msg,
 		"allow_partial?", &options.AllowPartial,
 		"discard_unknown?", &options.DiscardUnknown,
 	); err != nil {

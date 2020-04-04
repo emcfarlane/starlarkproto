@@ -108,3 +108,5 @@ m2 = test.Message()
 proto.unmarshal(data, m2)
 assert.eq(m, m2)
 
+# print(proto.marshal_json(m))
+# print(proto.marshal_text(m))

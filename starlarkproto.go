@@ -744,12 +744,12 @@ func (x *Message) CompareSameType(op syntax.Token, y_ starlark.Value, depth int)
 var (
 	listMethods = map[string]*starlark.Builtin{
 		"append": starlark.NewBuiltin("append", list_append),
-		//"clear":  list_clear,
+		"clear":  starlark.NewBuiltin("clear", list_clear),
 		"extend": starlark.NewBuiltin("extend", list_extend),
-		//"index":  list_index,
-		//"insert": list_insert,
-		//"pop":    list_pop,
-		//"remove": list_remove,
+		"index":  starlark.NewBuiltin("index", list_index),
+		"insert": starlark.NewBuiltin("insert", list_insert),
+		"pop":    starlark.NewBuiltin("pop", list_pop),
+		"remove": starlark.NewBuiltin("remove", list_remove),
 	}
 )
 
@@ -885,6 +885,17 @@ func (l *List) Slice(start, end, step int) starlark.Value {
 	return starlark.NewList(elems)
 }
 
+func (l *List) Clear() error {
+	if err := l.checkMutable("clear"); err != nil {
+		return err
+	}
+	if l.list.Len() > 0 {
+		l.list.Truncate(0)
+		l.refs = nil
+	}
+	return nil
+}
+
 func (l *List) Type() string         { return l.fd.Kind().String() }
 func (l *List) Len() int             { return l.list.Len() }
 func (l *List) Truth() starlark.Bool { return l.Len() > 0 }
@@ -925,6 +936,24 @@ func (l *List) Append(v starlark.Value) error {
 	return nil
 }
 
+func (l *List) Pop(i int) (starlark.Value, error) {
+	v := l.Index(i)
+	n := l.Len()
+
+	// shift list after index
+	for j := i; j < n-1; j++ {
+		val := l.list.Get(j + 1)
+		l.list.Set(j, val)
+	}
+	l.list.Truncate(n - 1)
+
+	if l.isMutableType() {
+		l.refs = append(l.refs[:i], l.refs[i+1:]...)
+	}
+	return v, nil
+
+}
+
 func list_append(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var object starlark.Value
 	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 1, &object); err != nil {
@@ -932,6 +961,17 @@ func list_append(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tup
 	}
 	recv := b.Receiver().(*List)
 	if err := recv.Append(object); err != nil {
+		return nil, err
+	}
+	return starlark.None, nil
+}
+
+func list_clear(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 0); err != nil {
+		return nil, err
+	}
+	recv := b.Receiver().(*List)
+	if err := recv.Clear(); err != nil {
 		return nil, err
 	}
 	return starlark.None, nil
@@ -951,6 +991,165 @@ func list_extend(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tup
 		}
 	}
 	return starlark.None, nil
+}
+
+func outOfRange(i, n int, x starlark.Value) error {
+	if n == 0 {
+		return fmt.Errorf("index %d out of range: empty %s", i, x.Type())
+	} else {
+		return fmt.Errorf("%s index %d out of range [%d:%d]", x.Type(), i, -n, n-1)
+	}
+}
+
+func absIndex(i, len int) int {
+	if i < 0 {
+		i += len // negative offset
+	}
+	// clamp [0:len]
+	if i < 0 {
+		i = 0
+	} else if i > len {
+		i = len
+	}
+	return i
+}
+
+func asIndex(v starlark.Value, len int, result *int) (err error) {
+	if v != nil && v != starlark.None {
+		*result, err = starlark.AsInt32(v)
+		if err != nil {
+			return err
+		}
+		*result = absIndex(*result, len)
+	}
+	return nil
+}
+
+func list_index(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var value, start_, end_ starlark.Value
+	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 1, &value, &start_, &end_); err != nil {
+		return nil, err
+	}
+
+	recv := b.Receiver().(*List)
+	len := recv.Len()
+	start := 0
+	if err := asIndex(start_, len, &start); err != nil {
+		return nil, err
+	}
+
+	end := len
+	if err := asIndex(end_, len, &end); err != nil {
+		return nil, err
+	}
+
+	// find
+	for i := start; i < end; i++ {
+		if ok, err := starlark.Equal(recv.Index(i), value); ok {
+			return starlark.MakeInt(i), nil
+		} else if err != nil {
+			return nil, fmt.Errorf("%s: %w", b.Name(), err)
+		}
+	}
+	return nil, fmt.Errorf("%s: value not in list", b.Name())
+}
+
+func list_insert(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var index int
+	var object starlark.Value
+	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 2, &index, &object); err != nil {
+		return nil, err
+	}
+	recv := b.Receiver().(*List)
+	if err := recv.checkMutable("insert into"); err != nil {
+		return nil, fmt.Errorf("%s: %w", recv.Type(), err)
+	}
+
+	len := recv.Len()
+	index = absIndex(index, len)
+	if index >= len {
+		if err := recv.Append(object); err != nil {
+			return nil, err
+		}
+		return starlark.None, nil
+	}
+
+	val := recv.list.NewElement()
+	if err := starToProto(object, recv.fd, &val); err != nil {
+		return nil, err
+	}
+
+	v := object
+	if recv.isMutableType() {
+		if !isOwnType(v) {
+			v = protoToStar(val, recv.fd)
+		}
+	}
+
+	for i := index; i < len; i++ {
+		swap := recv.list.Get(i)
+		recv.list.Set(i, val)
+		val = swap
+
+		if recv.isMutableType() {
+			swapRef := recv.refs[i]
+			recv.refs[i] = v
+			v = swapRef
+		}
+	}
+
+	recv.list.Append(val)
+	if recv.isMutableType() {
+		recv.refs = append(recv.refs, v)
+	}
+
+	return starlark.None, nil
+}
+
+func list_pop(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	recv := b.Receiver().(*List)
+	n := recv.Len()
+	i := n - 1
+	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 0, &i); err != nil {
+		return nil, err
+	}
+	if err := recv.checkMutable("pop from"); err != nil {
+		return nil, fmt.Errorf("%s: %w", b.Name(), err)
+	}
+	origI := i
+	if i < 0 {
+		i += n
+	}
+	if i < 0 || i >= n {
+		return nil, fmt.Errorf("%s: %w", b.Name(), outOfRange(origI, n, recv))
+	}
+	return recv.Pop(i)
+}
+
+func list_remove(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var value starlark.Value
+	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 1, &value); err != nil {
+		return nil, err
+	}
+	recv := b.Receiver().(*List)
+	if err := recv.checkMutable("remove from"); err != nil {
+		return nil, fmt.Errorf("%s: %w", recv.Type(), err)
+	}
+
+	// find
+	for i := 0; i < recv.Len(); i++ {
+		if ok, err := starlark.Equal(recv.Index(i), value); ok {
+			// pop
+			if _, err := recv.Pop(i); err != nil {
+				return nil, err
+			}
+			return starlark.None, nil
+
+		} else if err != nil {
+			return nil, fmt.Errorf("%s: %w", b.Name(), err)
+		}
+	}
+	return nil, fmt.Errorf("%s: element not found", b.Name())
 }
 
 // Enum is the type of a protobuf enum.

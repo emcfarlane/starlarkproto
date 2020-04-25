@@ -832,6 +832,7 @@ func (x *Message) CompareSameType(op syntax.Token, y_ starlark.Value, depth int)
 }
 
 var (
+	// methods from starlark/library.go
 	listMethods = map[string]*starlark.Builtin{
 		"append": starlark.NewBuiltin("append", list_append),
 		"clear":  starlark.NewBuiltin("clear", list_clear),
@@ -1520,9 +1521,120 @@ func (m *Map) checkMutable(verb string) error {
 	return nil
 }
 
-//func (m *Map) Attr(name string) (starlark.Value, error) {
-//	return nil, nil
-//}
-//func (m *Map) AttrNames() []string {
-//	return nil
-//}
+var (
+	// methods from starlark/library.go
+	mapMethods = map[string]*starlark.Builtin{
+		"clear": starlark.NewBuiltin("clear", dict_clear),
+		"get":   starlark.NewBuiltin("get", dict_get),
+		"items": starlark.NewBuiltin("items", dict_items),
+		"keys":  starlark.NewBuiltin("keys", dict_keys),
+		"pop":   starlark.NewBuiltin("pop", dict_pop),
+		//"popitem":    starlark.NewBuiltin("popitem", dict_popitem), // TODO: list based?
+		"setdefault": starlark.NewBuiltin("setdefault", dict_setdefault),
+		//"update":     starlark.NewBuiltin("update", dict_update), // TODO: update list.
+		"values": starlark.NewBuiltin("values", dict_values),
+	}
+)
+
+func (m *Map) Attr(name string) (starlark.Value, error) { return bindAttr(m, name, mapMethods) }
+func (m *Map) AttrNames() []string                      { return builtinAttrNames(mapMethods) }
+
+func dict_clear(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 0); err != nil {
+		return nil, err
+	}
+	recv := b.Receiver().(*Map)
+	if err := recv.Clear(); err != nil {
+		return nil, err
+	}
+	return starlark.None, nil
+}
+
+func dict_get(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var key, dflt starlark.Value
+	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 1, &key, &dflt); err != nil {
+		return nil, err
+	}
+	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 0); err != nil {
+		return nil, err
+	}
+	if v, ok, err := b.Receiver().(*Map).Get(key); err != nil {
+		return nil, err
+	} else if ok {
+		return v, nil
+	} else if dflt != nil {
+		return dflt, nil
+	}
+	return starlark.None, nil
+}
+
+func dict_items(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 0); err != nil {
+		return nil, err
+	}
+	items := b.Receiver().(*Map).Items()
+	res := make([]starlark.Value, len(items))
+	for i, item := range items {
+		res[i] = item // convert [2]Value to Value
+	}
+	return starlark.NewList(res), nil
+}
+
+func dict_keys(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 0); err != nil {
+		return nil, err
+	}
+	return starlark.NewList(b.Receiver().(*Map).Keys()), nil
+}
+
+func dict_pop(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var k, d starlark.Value
+	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 1, &k, &d); err != nil {
+		return nil, err
+	}
+	if v, found, err := b.Receiver().(*Map).Delete(k); err != nil {
+		return nil, err
+	} else if found {
+		return v, nil
+	} else if d != nil {
+		return d, nil
+	}
+	return nil, fmt.Errorf("%s: missing key", b.Name())
+}
+
+func dict_setdefault(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var key, dflt starlark.Value = nil, starlark.None
+	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 1, &key, &dflt); err != nil {
+		return nil, err
+	}
+	m := b.Receiver().(*Map)
+	if v, ok, err := m.Get(key); err != nil {
+		return nil, err
+	} else if ok {
+		return v, nil
+	} else if err := m.SetKey(key, dflt); err != nil {
+		return nil, err
+	}
+	return dflt, nil
+}
+
+func dict_update(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if len(args) > 1 {
+		return nil, fmt.Errorf("update: got %d arguments, want at most 1", len(args))
+	}
+	//m := b.Receiver().(*Map)
+	// TODO: update
+	return starlark.None, nil
+}
+
+func dict_values(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 0); err != nil {
+		return nil, err
+	}
+	items := b.Receiver().(*Map).Items()
+	res := make([]starlark.Value, len(items))
+	for i, item := range items {
+		res[i] = item[1]
+	}
+	return starlark.NewList(res), nil
+}

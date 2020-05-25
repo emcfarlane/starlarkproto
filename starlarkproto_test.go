@@ -11,7 +11,7 @@ import (
 	"go.starlark.net/starlarktest"
 	"google.golang.org/protobuf/reflect/protoregistry"
 
-	_ "github.com/afking/starlarkproto/testpb" // import side effect
+	_ "github.com/emcfarlane/starlarkproto/testpb" // import side effect
 )
 
 func load(thread *starlark.Thread, module string) (starlark.StringDict, error) {

@@ -1,4 +1,4 @@
-module github.com/afking/starlarkproto
+module github.com/emcfarlane/starlarkproto
 
 go 1.13
 

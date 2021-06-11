@@ -10,7 +10,7 @@ print(s)
 #m = proto("starlarkproto.test.Message", body="Hello, world!")
 #test = proto.package("starlarkproto.test")
 #test = 1
-test = proto.file("github.com/emcfarlane/starlarkproto/testpb/star.proto")
+test = proto.file("testpb/star.proto")
 m = test.Message(body="Hello, world!")
 assert.eq(m, m)
 assert.eq(dir(m), ["body", "maps", "nested", "one_number", "one_string", "oneofs", "strings", "type"])

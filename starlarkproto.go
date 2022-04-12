@@ -45,7 +45,7 @@ func NewProto(resolver protodesc.Resolver) *Proto {
 
 func (p *Proto) File(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var name string
-	if err := starlark.UnpackPositionalArgs("proto.package", args, kwargs, 1, &name); err != nil {
+	if err := starlark.UnpackPositionalArgs("proto.file", args, kwargs, 1, &name); err != nil {
 		return nil, err
 	}
 
@@ -58,7 +58,7 @@ func (p *Proto) File(thread *starlark.Thread, b *starlark.Builtin, args starlark
 
 func (p *Proto) New(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var name string
-	if err := starlark.UnpackPositionalArgs("proto.package", args, kwargs, 1, &name); err != nil {
+	if err := starlark.UnpackPositionalArgs("proto.new", args, kwargs, 1, &name); err != nil {
 		return nil, err
 	}
 	fullname := protoreflect.FullName(name)

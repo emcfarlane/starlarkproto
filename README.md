@@ -1,5 +1,8 @@
 # starlarkproto
 
+Moved to github.com/emcfarlane/larking!
+
+
 [![GoDev](https://img.shields.io/static/v1?label=godev&message=reference&color=00add8)](https://pkg.go.dev/github.com/emcfarlane/starlarkproto?tab=doc)
 
 Supports protobuffers in starlark!

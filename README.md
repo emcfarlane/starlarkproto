@@ -1,11 +1,8 @@
 # starlarkproto
 
-Moved to github.com/emcfarlane/larking!
-
-
 [![GoDev](https://img.shields.io/static/v1?label=godev&message=reference&color=00add8)](https://pkg.go.dev/github.com/emcfarlane/starlarkproto?tab=doc)
 
-Supports protobuffers in starlark!
+Supports protobuffers in starlark with rich type conversion to and from starlark. Most methods on lists and maps are supported, see package internals for details.
 
 ```python
 test = proto.file("github.com/emcfarlane/starlarkproto/testpb/star.proto")

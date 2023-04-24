@@ -6,10 +6,8 @@ s = struct(body = "hello")
 assert.eq(s, s)
 print(s)
 
+
 # Prefer load by import path for dynamic protobuf support
-#m = proto("starlarkproto.test.Message", body="Hello, world!")
-#test = proto.package("starlarkproto.test")
-#test = 1
 test = proto.file("testpb/star.proto")
 m = test.Message(body="Hello, world!")
 assert.eq(m, m)

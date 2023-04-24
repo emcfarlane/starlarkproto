@@ -1,3 +1,8 @@
+// Copyright 2021 Edward McFarlane. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package starlarkproto provides support for protocol buffers.
 package starlarkproto
 
 import (
@@ -5,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/google/go-cmp/cmp"
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"
 	"go.starlark.net/syntax"
@@ -14,26 +20,31 @@ import (
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
+	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/dynamicpb"
+
+	"github.com/emcfarlane/starlarkproto/internal"
 )
 
+// NewModule returns a new proto module.
 func NewModule(resolver protodesc.Resolver) *starlarkstruct.Module {
 	p := NewProto(resolver)
 	return &starlarkstruct.Module{
 		Name: "proto",
 		Members: starlark.StringDict{
-			"file":           starlark.NewBuiltin("proto.file", p.File),
-			"new":            starlark.NewBuiltin("proto.new", p.New),
-			"marshal":        starlark.NewBuiltin("proto.marshal", p.Marshal),
-			"unmarshal":      starlark.NewBuiltin("proto.unmarshal", p.Unmarshal),
-			"marshal_json":   starlark.NewBuiltin("proto.marshal_json", p.MarshalJSON),
-			"unmarshal_json": starlark.NewBuiltin("proto.unmarshal_json", p.UnmarshalJSON),
-			"marshal_text":   starlark.NewBuiltin("proto.marshal_text", p.MarshalText),
-			"unmarshal_text": starlark.NewBuiltin("proto.unmarshal_text", p.UnmarshalText),
+			"new":            internal.MakeBuiltin("proto.new", p.New),
+			"file":           internal.MakeBuiltin("proto.file", p.File),
+			"marshal":        internal.MakeBuiltin("proto.marshal", p.Marshal),
+			"unmarshal":      internal.MakeBuiltin("proto.unmarshal", p.Unmarshal),
+			"marshal_json":   internal.MakeBuiltin("proto.marshal_json", p.MarshalJSON),
+			"unmarshal_json": internal.MakeBuiltin("proto.unmarshal_json", p.UnmarshalJSON),
+			"marshal_text":   internal.MakeBuiltin("proto.marshal_text", p.MarshalText),
+			"unmarshal_text": internal.MakeBuiltin("proto.unmarshal_text", p.UnmarshalText),
 		},
 	}
 }
 
+// Proto is a proto module.
 type Proto struct {
 	resolver protodesc.Resolver
 	types    protoregistry.Types // TODO: wrap resolver to register extensions.
@@ -43,12 +54,13 @@ func NewProto(resolver protodesc.Resolver) *Proto {
 	return &Proto{resolver: resolver}
 }
 
-func (p *Proto) File(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+// File returns the file descriptor for the given path.
+// file(path)
+func (p *Proto) File(thread *starlark.Thread, fnname string, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var name string
-	if err := starlark.UnpackPositionalArgs("proto.file", args, kwargs, 1, &name); err != nil {
+	if err := starlark.UnpackPositionalArgs(fnname, args, kwargs, 1, &name); err != nil {
 		return nil, err
 	}
-
 	fileDesc, err := p.resolver.FindFileByPath(name)
 	if err != nil {
 		return nil, err
@@ -56,9 +68,11 @@ func (p *Proto) File(thread *starlark.Thread, b *starlark.Builtin, args starlark
 	return &Descriptor{desc: fileDesc}, nil
 }
 
-func (p *Proto) New(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+// New returns a new descriptor.
+// new(name)
+func (p *Proto) New(thread *starlark.Thread, fnname string, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var name string
-	if err := starlark.UnpackPositionalArgs("proto.new", args, kwargs, 1, &name); err != nil {
+	if err := starlark.UnpackPositionalArgs(fnname, args, kwargs, 1, &name); err != nil {
 		return nil, err
 	}
 	fullname := protoreflect.FullName(name)
@@ -70,11 +84,13 @@ func (p *Proto) New(thread *starlark.Thread, b *starlark.Builtin, args starlark.
 	return &Descriptor{desc: desc}, nil
 }
 
-func (p *Proto) Marshal(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+// Marshal marshals a message to binary string.
+// marhsal(msg, allow_partial=False, deterministic=False, use_cache_size=False)
+func (p *Proto) Marshal(thread *starlark.Thread, fnname string, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var msg *Message
 	var options proto.MarshalOptions
 	if err := starlark.UnpackPositionalArgs(
-		"proto.unmarshal", args, kwargs, 1, &msg,
+		fnname, args, kwargs, 1, &msg,
 		"allow_partial?", &options.AllowPartial,
 		"deterministic?", &options.Deterministic,
 		"use_cache_size?", &options.UseCachedSize,
@@ -88,21 +104,23 @@ func (p *Proto) Marshal(thread *starlark.Thread, b *starlark.Builtin, args starl
 	return starlark.String(string(data)), nil
 }
 
-func (p *Proto) Unmarshal(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+// Unmarshal unmarshals a message from binary string.
+// unmarshal(str, msg, merge=False, allow_partial=False, discard_unknown=False)
+func (p *Proto) Unmarshal(thread *starlark.Thread, fnname string, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var str string
 	var msg *Message
 	options := proto.UnmarshalOptions{
 		Resolver: &p.types, // TODO: types...
 	}
 	if err := starlark.UnpackPositionalArgs(
-		"proto.unmarshal", args, kwargs, 2, &str, &msg,
+		fnname, args, kwargs, 2, &str, &msg,
 		"merge?", &options.Merge,
 		"allow_partial?", &options.AllowPartial,
 		"discard_unknown?", &options.DiscardUnknown,
 	); err != nil {
 		return nil, err
 	}
-	if err := msg.checkMutable("unmarshal"); err != nil {
+	if err := msg.checkMutable(fnname); err != nil {
 		return nil, err
 	}
 	if err := proto.Unmarshal([]byte(str), msg); err != nil {
@@ -111,11 +129,13 @@ func (p *Proto) Unmarshal(thread *starlark.Thread, b *starlark.Builtin, args sta
 	return starlark.None, nil
 }
 
-func (p *Proto) MarshalJSON(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+// MarshalJSON marshals a message to json.
+// marshal_json(msg, multiline=False, indent=None, allow_partial=False, use_proto_names=False, use_enum_numbers=False, emit_unpopulated=False)
+func (p *Proto) MarshalJSON(thread *starlark.Thread, fnname string, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var msg *Message
 	var options protojson.MarshalOptions
 	if err := starlark.UnpackPositionalArgs(
-		"proto.unmarshal_json", args, kwargs, 1, &msg,
+		fnname, args, kwargs, 1, &msg,
 		"multiline?", &options.Multiline,
 		"indent?", &options.Indent,
 		"allow_partial?", &options.AllowPartial,
@@ -132,20 +152,22 @@ func (p *Proto) MarshalJSON(thread *starlark.Thread, b *starlark.Builtin, args s
 	return starlark.String(string(data)), nil
 }
 
-func (p *Proto) UnmarshalJSON(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+// UnmarshalJSON unmarshals a json string to a message.
+// unmarshal_json(str, msg, allow_partial=False, discard_unknown=False)
+func (p *Proto) UnmarshalJSON(thread *starlark.Thread, fnname string, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var str string
 	var msg *Message
 	options := protojson.UnmarshalOptions{
 		Resolver: &p.types, // TODO: types...
 	}
 	if err := starlark.UnpackPositionalArgs(
-		"proto.unmarshal_json", args, kwargs, 2, &str, &msg,
+		fnname, args, kwargs, 2, &str, &msg,
 		"allow_partial?", &options.AllowPartial,
 		"discard_unknown?", &options.DiscardUnknown,
 	); err != nil {
 		return nil, err
 	}
-	if err := msg.checkMutable("unmarshal"); err != nil {
+	if err := msg.checkMutable(fnname); err != nil {
 		return nil, err
 	}
 	if err := proto.Unmarshal([]byte(str), msg); err != nil {
@@ -154,11 +176,13 @@ func (p *Proto) UnmarshalJSON(thread *starlark.Thread, b *starlark.Builtin, args
 	return starlark.None, nil
 }
 
-func (p *Proto) MarshalText(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+// MarshalText marshals a message to text.
+// marshal_text(msg, multiline=False, indent=None, allow_partial=False, emit_unknown=False)
+func (p *Proto) MarshalText(thread *starlark.Thread, fnname string, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var msg *Message
 	var options prototext.MarshalOptions
 	if err := starlark.UnpackPositionalArgs(
-		"proto.unmarshal_text", args, kwargs, 1, &msg,
+		fnname, args, kwargs, 1, &msg,
 		"multiline?", &options.Multiline,
 		"indent?", &options.Indent,
 		"allow_partial?", &options.AllowPartial,
@@ -173,20 +197,22 @@ func (p *Proto) MarshalText(thread *starlark.Thread, b *starlark.Builtin, args s
 	return starlark.String(string(data)), nil
 }
 
-func (p *Proto) UnmarshalText(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+// UnmarshalText unmarshals a text string to a message.
+// unmarshal_text(str, msg, allow_partial=False, discard_unknown=False)
+func (p *Proto) UnmarshalText(thread *starlark.Thread, fnname string, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var str string
 	var msg *Message
 	options := prototext.UnmarshalOptions{
 		Resolver: &p.types, // TODO: types...
 	}
 	if err := starlark.UnpackPositionalArgs(
-		"proto.unmarshal_text", args, kwargs, 2, &str, &msg,
+		fnname, args, kwargs, 2, &str, &msg,
 		"allow_partial?", &options.AllowPartial,
 		"discard_unknown?", &options.DiscardUnknown,
 	); err != nil {
 		return nil, err
 	}
-	if err := msg.checkMutable("unmarshal"); err != nil {
+	if err := msg.checkMutable(fnname); err != nil {
 		return nil, err
 	}
 	if err := proto.Unmarshal([]byte(str), msg); err != nil {
@@ -202,15 +228,6 @@ func equalFullName(a, b protoreflect.FullName) error {
 	return nil
 }
 
-func isOwnType(v starlark.Value) bool {
-	switch v.(type) {
-	case *Descriptor, *Message, *List, *Map, Enum:
-		return true
-	default:
-		return false
-	}
-}
-
 type Descriptor struct {
 	desc protoreflect.Descriptor
 
@@ -218,6 +235,7 @@ type Descriptor struct {
 	attrs  map[string]protoreflect.Descriptor
 }
 
+// NewDescriptor creates a new descriptor.
 func NewDescriptor(desc protoreflect.Descriptor) *Descriptor { return &Descriptor{desc: desc} }
 
 // Descriptor exports proto.Descriptor
@@ -229,6 +247,8 @@ func (d *Descriptor) Freeze()               { d.frozen = true }
 func (d *Descriptor) Truth() starlark.Bool  { return d.desc != nil }
 func (d *Descriptor) Hash() (uint32, error) { return 0, fmt.Errorf("unhashable type: proto.desc") }
 func (d *Descriptor) Name() string          { return string(d.desc.Name()) } // TODO
+
+// CallInternal creates a new message or enum from a descriptor.
 func (d *Descriptor) CallInternal(thread *starlark.Thread, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	switch v := d.desc.(type) {
 	case protoreflect.FileDescriptor:
@@ -245,7 +265,16 @@ func (d *Descriptor) CallInternal(thread *starlark.Thread, args starlark.Tuple, 
 		return NewEnum(vals, args[0])
 
 	case protoreflect.MessageDescriptor:
-		msg := dynamicpb.NewMessage(v)
+		// Create the msg, try to use to Go type if avaliable.
+		var msg protoreflect.Message
+		if mt, err := protoregistry.GlobalTypes.FindMessageByName(
+			v.FullName(),
+		); err == nil {
+			msg = mt.New()
+		} else {
+			// Fallback to dynamic meessages.
+			msg = dynamicpb.NewMessage(v)
+		}
 		return NewMessage(msg, args, kwargs)
 
 	default:
@@ -341,10 +370,8 @@ func (d *Descriptor) AttrNames() []string {
 
 // Message represents a proto.Message as a starlark.Value.
 type Message struct {
-	msg protoreflect.Message
-
-	frozen bool
-	refs   map[protoreflect.Name]starlark.Value // mutable live references
+	msg    protoreflect.Message
+	frozen *bool
 }
 
 // ProtoReflect implements proto.Message
@@ -352,23 +379,22 @@ func (m *Message) ProtoReflect() protoreflect.Message { return m.msg }
 
 // Type conversions rules:
 //
-//  ═══════════════╤════════════════════════════════════
-//  Starlark type  │ Protobuf Type
-//  ═══════════════╪════════════════════════════════════
-//  NoneType       │ MessageKind, GroupKind
-//  Bool           │ BoolKind
-//  Int            │ Int32Kind, Sint32Kind, Sfixed32Kind,
-//                 │ Int64Kind, Sint64Kind, Sfixed64Kind,
-//                 │ Uint32Kind, Fixed32Kind,
-//                 │ Uint64Kind, Fixed64Kind
-//  Float          │ FloatKind, DoubleKind
-//  String         │ StringKind, BytesKind
-//  *List          │ List<Kind>
-//  Tuple          │ n/a
-//  *Dict          │ Map<Kind><Kind>
-//  *Set           │ n/a
-//
-func protoToStar(v protoreflect.Value, fd protoreflect.FieldDescriptor) starlark.Value {
+//	═══════════════╤════════════════════════════════════
+//	Starlark type  │ Protobuf Type
+//	═══════════════╪════════════════════════════════════
+//	NoneType       │ MessageKind, GroupKind
+//	Bool           │ BoolKind
+//	Int            │ Int32Kind, Sint32Kind, Sfixed32Kind,
+//	               │ Int64Kind, Sint64Kind, Sfixed64Kind,
+//	               │ Uint32Kind, Fixed32Kind,
+//	               │ Uint64Kind, Fixed64Kind
+//	Float          │ FloatKind, DoubleKind
+//	String         │ StringKind, BytesKind
+//	*List          │ List<Kind>
+//	Tuple          │ n/a
+//	*Dict          │ Map<Kind><Kind>
+//	*Set           │ n/a
+func toStarlark(v protoreflect.Value, fd protoreflect.FieldDescriptor, frozen *bool) starlark.Value {
 	switch v := v.Interface().(type) {
 	case nil:
 		return starlark.None
@@ -397,265 +423,222 @@ func protoToStar(v protoreflect.Value, fd protoreflect.FieldDescriptor) starlark
 		}
 		return Enum{edesc: evdesc}
 	case protoreflect.List:
-		return &List{list: v, fd: fd}
+		return &List{list: v, fd: fd, frozen: frozen}
 	case protoreflect.Message:
-		return &Message{msg: v}
+		return &Message{msg: v, frozen: frozen}
 	case protoreflect.Map:
-		return &Map{m: v, keyfd: fd.MapKey(), valfd: fd.MapValue()}
+		return &Map{m: v, keyfd: fd.MapKey(), valfd: fd.MapValue(), frozen: frozen}
 	default:
 		panic(fmt.Sprintf("unhandled proto type %s %T", v, v))
 	}
 }
 
-func starToProtoMessage(v starlark.Value, val *protoreflect.Value) error {
-	switch v := v.(type) {
-	case starlark.NoneType:
-		msg := val.Message()
-		*val = protoreflect.ValueOfMessage(msg.Type().Zero()) // RO
-		return nil
-	case *starlarkstruct.Struct:
-		msg := val.Message()
-		m := Message{msg: msg} // wrap for set
-
-		for _, name := range v.AttrNames() {
-			val, err := v.Attr(name)
-			if err != nil {
-				return err
-			}
-			if err := m.SetField(name, val); err != nil {
-				return err
-			}
-		}
-		return nil
-	case starlark.IterableMapping:
-		msg := val.Message()
-		m := Message{msg: msg} // wrap for set
-
-		for _, kv := range v.Items() {
-			key, ok := kv[0].(starlark.String)
-			if !ok {
-				return fmt.Errorf("proto: invalid key type %s", kv[0].Type())
-			}
-			if err := m.SetField(string(key), kv[1]); err != nil {
-				return err
-			}
-		}
-		return nil
-	case *Message:
-		msg := val.Message()
-		if err := equalFullName(msg.Descriptor().FullName(), v.msg.Descriptor().FullName()); err != nil {
-			return err
-		}
-		*val = protoreflect.ValueOfMessage(v.msg)
-		return nil
+func allocField(parent protoreflect.Value, fd protoreflect.FieldDescriptor) protoreflect.Value {
+	switch v := parent.Interface().(type) {
+	case protoreflect.List:
+		return v.NewElement()
+	case protoreflect.Map:
+		return v.NewValue()
+	case protoreflect.Message:
+		return v.NewField(fd)
 	default:
-		return fmt.Errorf("proto: unknown type conversion %s<%T> to proto.message", v, v)
+		panic(fmt.Sprintf("unhandled parent value type: %T", v))
 	}
 }
 
-func starToProto(v starlark.Value, fd protoreflect.FieldDescriptor, val *protoreflect.Value) error {
+func toProtobuf(v starlark.Value, fd protoreflect.FieldDescriptor, parent protoreflect.Value) (protoreflect.Value, error) {
 	switch kind := fd.Kind(); kind {
 	case protoreflect.BoolKind:
 		if b, ok := v.(starlark.Bool); ok {
-			*val = protoreflect.ValueOfBool(bool(b))
-			return nil
+			return protoreflect.ValueOfBool(bool(b)), nil
 		}
 	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind:
 		if x, err := starlark.NumberToInt(v); err == nil {
 			v, err := starlark.AsInt32(x)
 			if err != nil {
-				return err
+				return protoreflect.Value{}, err
 			}
-			*val = protoreflect.ValueOfInt32(int32(v))
-			return nil
+			return protoreflect.ValueOfInt32(int32(v)), nil
 		}
 	case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind:
 		if x, err := starlark.NumberToInt(v); err == nil {
 			v, _ := x.Int64()
-			*val = protoreflect.ValueOfInt64(int64(v))
-			return nil
+			return protoreflect.ValueOfInt64(v), nil
 		}
 	case protoreflect.Uint32Kind, protoreflect.Fixed32Kind:
 		if x, err := starlark.NumberToInt(v); err == nil {
 			v, _ := x.Uint64()
-			*val = protoreflect.ValueOfUint32(uint32(v))
-			return nil
+			return protoreflect.ValueOfUint32(uint32(v)), nil
 		}
 	case protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
 		if x, err := starlark.NumberToInt(v); err == nil {
 			v, _ := x.Uint64()
-			*val = protoreflect.ValueOfUint64(uint64(v))
-			return nil
+			return protoreflect.ValueOfUint64(v), nil
 		}
 	case protoreflect.FloatKind:
 		if x, ok := starlark.AsFloat(v); ok {
-			*val = protoreflect.ValueOfFloat32(float32(x))
-			return nil
+			return protoreflect.ValueOfFloat32(float32(x)), nil
 		}
 	case protoreflect.DoubleKind:
 		if x, ok := starlark.AsFloat(v); ok {
-			*val = protoreflect.ValueOfFloat64(float64(x))
-			return nil
+			return protoreflect.ValueOfFloat64(float64(x)), nil
 		}
 	case protoreflect.StringKind:
 		if x, ok := v.(starlark.String); ok {
-			*val = protoreflect.ValueOfString(string(x))
-			return nil
+			return protoreflect.ValueOfString(string(x)), nil
 		}
 	case protoreflect.BytesKind:
 		if x, ok := v.(starlark.String); ok {
-			*val = protoreflect.ValueOfBytes([]byte(x))
-			return nil
+			return protoreflect.ValueOfBytes([]byte(x)), nil
 		}
 	case protoreflect.EnumKind:
 		switch v := v.(type) {
 		case starlark.String:
 			enumVal := fd.Enum().Values().ByName(protoreflect.Name(string(v)))
 			if enumVal == nil {
-				return fmt.Errorf("proto: enum has no %s value", v)
+				return protoreflect.Value{}, fmt.Errorf("proto: enum has no %s value", v)
 			}
-			*val = protoreflect.ValueOfEnum(enumVal.Number())
-			return nil
+			return protoreflect.ValueOfEnum(enumVal.Number()), nil
 		case starlark.Int, starlark.Float:
 			i, err := starlark.NumberToInt(v)
 			if err != nil {
-				return err
+				return protoreflect.Value{}, err
 			}
 			x, ok := i.Int64()
 			if !ok {
-				return fmt.Errorf("proto: enum has no %s value", v)
+				return protoreflect.Value{}, fmt.Errorf("proto: enum has no %s value", v)
 			}
-			*val = protoreflect.ValueOfEnum(protoreflect.EnumNumber(int32(x)))
-			return nil
+			return protoreflect.ValueOfEnum(protoreflect.EnumNumber(int32(x))), nil
 		case Enum:
-			if err := equalFullName(v.edesc.Parent().FullName(), fd.Enum().FullName()); err != nil {
-				return err
-			}
-			*val = protoreflect.ValueOfEnum(v.edesc.Number())
-			return nil
+			return protoreflect.ValueOfEnum(v.edesc.Number()), nil
 		}
 	case protoreflect.MessageKind:
 		if fd.IsMap() {
 			switch v := v.(type) {
 			case *Map:
-				// TODO: maps just need the same type?
-				if err := equalFullName(v.keyfd.FullName(), fd.MapKey().FullName()); err != nil {
-					return err
-				}
-				if err := equalFullName(v.valfd.FullName(), fd.MapValue().FullName()); err != nil {
-					return err
-				}
-				*val = protoreflect.ValueOfMap(v.m)
-				return nil
+				return protoreflect.ValueOfMap(v.m), nil
 			case starlark.IterableMapping:
-				v, ok := v.(starlark.IterableMapping)
-				if !ok {
-					break
-				}
+				val := allocField(parent, fd)
+
 				mm := val.Map()
 				kfd := fd.MapKey()
 				vfd := fd.MapValue()
 
-				iter, ok := v.(starlark.IterableMapping)
-				if !ok {
-					break
-				}
-
-				items := iter.Items()
+				items := v.Items()
 				for _, item := range items {
-					mval := mm.NewValue()
-					if err := starToProto(item[0], kfd, &mval); err != nil {
-						return err
+					// can only be scalar.
+					kval, err := toProtobuf(item[0], kfd, val)
+					if err != nil {
+						return protoreflect.Value{}, err
 					}
-					mkey := mval.MapKey()
+					mkey := kval.MapKey()
 
-					vval := mm.Mutable(mkey)
-					if err := starToProto(item[1], vfd, &vval); err != nil {
-						return err
+					mval, err := toProtobuf(item[1], vfd, val)
+					if err != nil {
+						return protoreflect.Value{}, err
 					}
 
-					mm.Set(mkey, vval)
+					mm.Set(mkey, mval)
 				}
-				return nil
+				return val, nil
+				//return protoreflect.ValueOfMap(mm), nil
 			}
-			break
+		} else {
+			switch v := v.(type) {
+			case *Message:
+				return protoreflect.ValueOfMessage(v.msg), nil
+			case *List, *starlark.List:
+				return protoreflect.Value{}, fmt.Errorf("list can't be assigned to message of type: %q", fd.Message().FullName())
+			case starlark.NoneType:
+				msg := parent.Message()
+				msg.Clear(fd)
+				return msg.Get(fd), nil // RO
+			case starlark.IterableMapping:
+				val := allocField(parent, fd)
+				m := Message{msg: val.Message(), frozen: new(bool)} // wrap for set
+
+				for _, kv := range v.Items() {
+					key, ok := kv[0].(starlark.String)
+					if !ok {
+						return protoreflect.Value{}, fmt.Errorf("proto: invalid key type %s", kv[0].Type())
+					}
+					if err := m.SetField(string(key), kv[1]); err != nil {
+						return protoreflect.Value{}, err
+					}
+				}
+				return val, nil
+			case starlark.HasAttrs:
+				val := allocField(parent, fd)
+				m := Message{msg: val.Message(), frozen: new(bool)} // wrap for set
+
+				for _, name := range v.AttrNames() {
+					val, err := v.Attr(name)
+					if err != nil {
+						return protoreflect.Value{}, err
+					}
+					if err := m.SetField(name, val); err != nil {
+						return protoreflect.Value{}, err
+					}
+				}
+				return val, nil
+			}
 		}
-		return starToProtoMessage(v, val)
 	default:
 		panic(fmt.Sprintf("unknown kind %q", kind))
 	}
-	return fmt.Errorf("proto: unknown type conversion %s<%T> to %s", v, v, fd.Kind().String())
+	return protoreflect.Value{}, fmt.Errorf(
+		"proto: unknown type conversion %s<%T> to %s", v, v, fd.Kind(),
+	)
 }
 
-func starToProtos(v starlark.Value, fd protoreflect.FieldDescriptor, val *protoreflect.Value) error {
+func (m *Message) encodeField(v starlark.Value, fd protoreflect.FieldDescriptor) (protoreflect.Value, error) {
+	// It is equivalent to checking whether Cardinality is Repeated and
+	// that IsMap reports false.
 	if !fd.IsList() {
-		return starToProto(v, fd, val)
+		fmt.Println("encodeField", v)
+		return toProtobuf(v, fd, protoreflect.ValueOfMessage(m.msg))
 	}
 
 	switch v := v.(type) {
 	case *List:
-		// TODO: check field types assertion makes sense.
-		if err := equalFullName(v.fd.FullName(), fd.FullName()); err != nil {
-			return err
-		}
-		*val = protoreflect.ValueOfList(v.list)
 		// Starlark type is wrapped in ref by caller.
-		return nil
+		return protoreflect.ValueOfList(v.list), nil
 
 	case starlark.Indexable:
+		val := m.msg.NewField(fd)
 		l := val.List()
+
 		for i := 0; i < v.Len(); i++ {
-			elem := l.NewElement()
-			if err := starToProto(v.Index(i), fd, &elem); err != nil {
-				return err
+			val, err := toProtobuf(v.Index(i), fd, val)
+			if err != nil {
+				return protoreflect.Value{}, err
 			}
-			l.Append(elem)
+			l.Append(val)
 		}
-		return nil
+		return val, nil
+
 	case starlark.Iterable:
+		val := m.msg.NewField(fd)
 		l := val.List()
+
 		iter := v.Iterate()
 		defer iter.Done()
 
 		var p starlark.Value
 		for iter.Next(&p) {
-			elem := l.NewElement()
-			if err := starToProto(p, fd, &elem); err != nil {
-				return err
+			val, err := toProtobuf(p, fd, val)
+			if err != nil {
+				return protoreflect.Value{}, err
 			}
-			l.Append(elem)
+			l.Append(val)
 		}
-		return nil
+		return val, nil
 	}
-	return fmt.Errorf("proto: unknown repeated type conversion %s", v.Type())
-}
-
-func (m *Message) get(fd protoreflect.FieldDescriptor) starlark.Value {
-	return protoToStar(m.msg.Get(fd), fd)
-}
-
-func (m *Message) isMutableType(fd protoreflect.FieldDescriptor) bool {
-	if fd.IsMap() || fd.IsList() {
-		if m.refs == nil {
-			m.refs = make(map[protoreflect.Name]starlark.Value)
-		}
-		if _, ok := m.refs[fd.Name()]; !ok {
-			m.refs[fd.Name()] = protoToStar(m.msg.Mutable(fd), fd)
-		}
-		return true
-	}
-	return fd.Kind() == protoreflect.MessageKind && m.msg.Has(fd)
-}
-
-func (m *Message) mutable(fd protoreflect.FieldDescriptor) starlark.Value {
-	if m.isMutableType(fd) {
-		return m.refs[fd.Name()] // SetField creates reference
-	}
-	return m.get(fd)
+	return protoreflect.Value{}, fmt.Errorf("proto: unknown repeated type conversion %s", v.Type())
 }
 
 func (m *Message) checkMutable(verb string) error {
-	if m.frozen {
+	if *m.frozen {
 		return fmt.Errorf("cannot %s frozen message", verb)
 	}
 	if !m.msg.IsValid() {
@@ -664,6 +647,15 @@ func (m *Message) checkMutable(verb string) error {
 	return nil
 }
 
+func MakeMessage(msg proto.Message) *Message {
+	return &Message{msg: msg.ProtoReflect(), frozen: new(bool)}
+}
+
+// NewMessage creates a *Message base on a protobuffer Message with the given
+// starlark args and kwargs.
+// If both args and kwargs are nil the message is unmodified.
+// Args or kwargs are exclusive.
+// Only one arg can be set of type *Message, None, IterableMapping or HasAttrs.
 func NewMessage(msg protoreflect.Message, args starlark.Tuple, kwargs []starlark.Tuple) (*Message, error) {
 	hasArgs := len(args) > 0
 	hasKwargs := len(kwargs) > 0
@@ -676,18 +668,51 @@ func NewMessage(msg protoreflect.Message, args starlark.Tuple, kwargs []starlark
 		return nil, fmt.Errorf("unxpected args and kwargs")
 	}
 
-	// TODO: clear?
-	m := &Message{
-		msg: msg,
-	}
 	if hasArgs {
-		val := protoreflect.ValueOfMessage(msg)
-		if err := starToProtoMessage(args[0], &val); err != nil {
-			return nil, err
+		switch v := args[0].(type) {
+		case *Message:
+			if msg.Type() != v.msg.Type() {
+				return nil, fmt.Errorf("mismatching type")
+			}
+			// shallow copy.
+			v.msg.Range(func(fd protoreflect.FieldDescriptor, v protoreflect.Value) bool {
+				msg.Set(fd, v)
+				return true
+			})
+			return &Message{msg: msg, frozen: new(bool)}, nil
+		case starlark.NoneType:
+			return &Message{msg: msg.Type().Zero(), frozen: new(bool)}, nil // RO
+		case starlark.IterableMapping:
+			m := &Message{msg: msg, frozen: new(bool)}
+			for _, kv := range v.Items() {
+				key, ok := kv[0].(starlark.String)
+				if !ok {
+					return nil, fmt.Errorf("proto: invalid key type %s", kv[0].Type())
+				}
+				if err := m.SetField(string(key), kv[1]); err != nil {
+					return nil, err
+				}
+			}
+			return m, nil
+		case starlark.HasAttrs:
+			m := &Message{msg: msg, frozen: new(bool)}
+			for _, name := range v.AttrNames() {
+				fmt.Println("----------hitting this?", name)
+				val, err := v.Attr(name)
+				if err != nil {
+					return nil, err
+				}
+				if err := m.SetField(name, val); err != nil {
+					return nil, err
+				}
+			}
+			return m, nil
+		default:
+			return nil, fmt.Errorf("proto: unknown type conversion %s<%T> to proto.message", v, v)
 		}
-		return m, nil
 	}
 
+	m := &Message{msg: msg, frozen: new(bool)}
 	for _, kwarg := range kwargs {
 		k := string(kwarg[0].(starlark.String))
 		v := kwarg[1]
@@ -714,8 +739,9 @@ func (m *Message) String() string {
 			fd := fds.Get(i)
 			buf.WriteString(string(fd.Name()))
 			buf.WriteString(" = ")
-			v := m.get(fd)
-			buf.WriteString(v.String())
+			v := m.msg.Get(fd)
+			s := toStarlark(v, fd, nil).String()
+			buf.WriteString(s)
 		}
 	} else {
 		buf.WriteString("None")
@@ -729,14 +755,7 @@ func (m *Message) Truth() starlark.Bool { return starlark.Bool(m.msg.IsValid()) 
 func (m *Message) Hash() (uint32, error) {
 	return 0, fmt.Errorf("unhashable type: proto.message")
 }
-func (m *Message) Freeze() {
-	if !m.frozen {
-		m.frozen = true
-		for _, v := range m.refs {
-			v.Freeze()
-		}
-	}
-}
+func (m *Message) Freeze() { *m.frozen = true }
 
 // Attr returns the value of the specified field.
 func (m *Message) Attr(name string) (starlark.Value, error) {
@@ -744,7 +763,11 @@ func (m *Message) Attr(name string) (starlark.Value, error) {
 	if err != nil {
 		return nil, err
 	}
-	return m.mutable(fd), nil // attr can mutate
+	// Get mutable references if we can.
+	if fd.IsMap() || fd.IsList() || (fd.Kind() == protoreflect.MessageKind && m.msg.Has(fd)) {
+		return toStarlark(m.msg.Mutable(fd), fd, m.frozen), nil
+	}
+	return toStarlark(m.msg.Get(fd), fd, m.frozen), nil
 }
 
 func (x *Message) Binary(op syntax.Token, y starlark.Value, side starlark.Side) (starlark.Value, error) {
@@ -779,7 +802,6 @@ func (m *Message) fieldDesc(name string) (protoreflect.FieldDescriptor, error) {
 	if od := desc.Oneofs().ByName(protoreflect.Name(name)); od != nil {
 		return m.msg.WhichOneof(od), nil
 	}
-
 	return nil, starlark.NoSuchAttrError(
 		fmt.Sprintf("%s has no .%s attribute", desc.Name(), name),
 	)
@@ -799,21 +821,12 @@ func (m *Message) SetField(name string, val starlark.Value) error {
 		return nil
 	}
 
-	v := m.msg.NewField(fd)
-	if err := starToProtos(val, fd, &v); err != nil {
+	v, err := m.encodeField(val, fd)
+	if err != nil {
 		return err
 	}
 
 	m.msg.Set(fd, v)
-	if m.isMutableType(fd) {
-		if m.refs == nil {
-			m.refs = make(map[protoreflect.Name]starlark.Value)
-		}
-		if !isOwnType(val) {
-			val = protoToStar(v, fd)
-		}
-		m.refs[fd.Name()] = val
-	}
 	return nil
 }
 
@@ -831,34 +844,9 @@ func (x *Message) CompareSameType(op syntax.Token, y_ starlark.Value, depth int)
 	}
 }
 
-var (
-	// methods from starlark/library.go
-	listMethods = map[string]*starlark.Builtin{
-		"append": starlark.NewBuiltin("append", list_append),
-		"clear":  starlark.NewBuiltin("clear", list_clear),
-		"extend": starlark.NewBuiltin("extend", list_extend),
-		"index":  starlark.NewBuiltin("index", list_index),
-		"insert": starlark.NewBuiltin("insert", list_insert),
-		"pop":    starlark.NewBuiltin("pop", list_pop),
-		"remove": starlark.NewBuiltin("remove", list_remove),
-	}
-)
-
-func bindAttr(recv starlark.Value, name string, methods map[string]*starlark.Builtin) (starlark.Value, error) {
-	b := methods[name]
-	if b == nil {
-		return nil, nil // no such method
-	}
-	return b.BindReceiver(recv), nil
-}
-
-func builtinAttrNames(methods map[string]*starlark.Builtin) []string {
-	names := make([]string, 0, len(methods))
-	for name := range methods {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
+func (x *Message) DiffSameType(y_ starlark.Value) (string, error) {
+	y := y_.(*Message)
+	return cmp.Diff(x.msg.Interface(), y.msg.Interface(), protocmp.Transform()), nil
 }
 
 // List represents a repeated field as a starlark.List.
@@ -866,13 +854,38 @@ type List struct {
 	list protoreflect.List
 	fd   protoreflect.FieldDescriptor
 
-	frozen    bool
+	frozen    *bool
 	itercount uint32
-	refs      []starlark.Value // mirrors list on mutable types
 }
 
-func (l *List) Attr(name string) (starlark.Value, error) { return bindAttr(l, name, listMethods) }
-func (l *List) AttrNames() []string                      { return builtinAttrNames(listMethods) }
+type listAttr func(l *List) starlark.Value
+
+// methods from starlark/library.go
+var listAttrs = map[string]listAttr{
+	"append": func(l *List) starlark.Value { return internal.MakeMethod(l, "append", l.append) },
+	"clear":  func(l *List) starlark.Value { return internal.MakeMethod(l, "clear", l.clear) },
+	"extend": func(l *List) starlark.Value { return internal.MakeMethod(l, "extend", l.extend) },
+	"index":  func(l *List) starlark.Value { return internal.MakeMethod(l, "index", l.index) },
+	"insert": func(l *List) starlark.Value { return internal.MakeMethod(l, "insert", l.insert) },
+	"pop":    func(l *List) starlark.Value { return internal.MakeMethod(l, "pop", l.pop) },
+	"remove": func(l *List) starlark.Value { return internal.MakeMethod(l, "remove", l.remove) },
+}
+
+func (l *List) Attr(name string) (starlark.Value, error) {
+	if a := listAttrs[name]; a != nil {
+		return a(l), nil
+	}
+	return nil, nil
+
+}
+func (l *List) AttrNames() []string {
+	names := make([]string, 0, len(listAttrs))
+	for name := range listAttrs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
 
 func (l *List) String() string {
 	buf := new(strings.Builder)
@@ -889,25 +902,14 @@ func (l *List) String() string {
 	return buf.String()
 }
 
-func (l *List) isMutableType() bool {
-	return l.fd.Kind() == protoreflect.MessageKind
-}
-
-func (l *List) Freeze() {
-	if !l.frozen {
-		l.frozen = true
-		for _, v := range l.refs {
-			v.Freeze()
-		}
-	}
-}
+func (l *List) Freeze() { *l.frozen = true }
 
 func (l *List) Hash() (uint32, error) {
 	return 0, fmt.Errorf("unhashable type: proto.list")
 }
 
 func (l *List) checkMutable(verb string) error {
-	if l.frozen {
+	if *l.frozen {
 		return fmt.Errorf("cannot %s frozen list", verb)
 	}
 	if l.itercount > 0 {
@@ -920,21 +922,18 @@ func (l *List) checkMutable(verb string) error {
 }
 
 func (l *List) Index(i int) starlark.Value {
-	if i < len(l.refs) {
-		return l.refs[i] // mutable refs
-	}
-	return protoToStar(l.list.Get(i), l.fd)
+	return toStarlark(l.list.Get(i), l.fd, l.frozen)
 }
 
 type listIterator struct {
-	l    *List
-	vals []starlark.Value
-	i    int
+	l *List
+	i int
 }
 
 func (it *listIterator) Next(p *starlark.Value) bool {
-	if it.i < len(it.vals) {
-		*p = it.vals[it.i]
+	if it.i < it.l.Len() {
+		v := it.l.list.Get(it.i)
+		*p = toStarlark(v, it.l.fd, it.l.frozen)
 		it.i++
 		return true
 	}
@@ -942,24 +941,16 @@ func (it *listIterator) Next(p *starlark.Value) bool {
 }
 
 func (it *listIterator) Done() {
-	if !it.l.frozen {
+	if !*it.l.frozen {
 		it.l.itercount--
 	}
 }
 
 func (l *List) Iterate() starlark.Iterator {
-	if !l.frozen {
+	if !*l.frozen {
 		l.itercount++
 	}
-	if len(l.refs) > 0 {
-		return &listIterator{l: l, vals: l.refs}
-	}
-	vals := make([]starlark.Value, l.list.Len())
-	for i := 0; i < l.list.Len(); i++ {
-		val := l.list.Get(i)
-		vals[i] = protoToStar(val, l.fd)
-	}
-	return &listIterator{l: l, vals: vals}
+	return &listIterator{l: l}
 }
 
 // From Hacker's Delight, section 2.8.
@@ -982,12 +973,12 @@ func (l *List) Clear() error {
 	}
 	if l.list.Len() > 0 {
 		l.list.Truncate(0)
-		l.refs = nil
 	}
 	return nil
 }
 
-func (l *List) Type() string         { return l.fd.Kind().String() }
+// Type is a typed list.
+func (l *List) Type() string         { return "list<" + l.fd.Kind().String() + ">" }
 func (l *List) Len() int             { return l.list.Len() }
 func (l *List) Truth() starlark.Bool { return l.Len() > 0 }
 
@@ -996,18 +987,12 @@ func (l *List) SetIndex(i int, v starlark.Value) error {
 		return err
 	}
 
-	val := l.list.NewElement()
-	if err := starToProto(v, l.fd, &val); err != nil {
+	val, err := toProtobuf(v, l.fd, protoreflect.ValueOfList(l.list))
+	if err != nil {
 		return err
 	}
 
 	l.list.Set(i, val)
-	if l.isMutableType() {
-		if !isOwnType(v) {
-			v = protoToStar(val, l.fd)
-		}
-		l.refs[i] = v
-	}
 	return nil
 }
 
@@ -1015,15 +1000,13 @@ func (l *List) Append(v starlark.Value) error {
 	if err := l.checkMutable("append to"); err != nil {
 		return err
 	}
-	val := l.list.NewElement()
-	if err := starToProto(v, l.fd, &val); err != nil {
+
+	val, err := toProtobuf(v, l.fd, protoreflect.ValueOfList(l.list))
+	if err != nil {
 		return err
 	}
 
 	l.list.Append(val)
-	if l.isMutableType() {
-		l.refs = append(l.refs, protoToStar(val, l.fd))
-	}
 	return nil
 }
 
@@ -1038,46 +1021,42 @@ func (l *List) Pop(i int) (starlark.Value, error) {
 	}
 	l.list.Truncate(n - 1)
 
-	if l.isMutableType() {
-		l.refs = append(l.refs[:i], l.refs[i+1:]...)
-	}
 	return v, nil
 
 }
 
-func list_append(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+func (v *List) append(thread *starlark.Thread, fnname string, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var object starlark.Value
-	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 1, &object); err != nil {
+	if err := starlark.UnpackPositionalArgs(fnname, args, kwargs, 1, &object); err != nil {
 		return nil, err
 	}
-	recv := b.Receiver().(*List)
-	if err := recv.Append(object); err != nil {
-		return nil, err
-	}
-	return starlark.None, nil
-}
-
-func list_clear(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 0); err != nil {
-		return nil, err
-	}
-	recv := b.Receiver().(*List)
-	if err := recv.Clear(); err != nil {
+	if err := v.Append(object); err != nil {
 		return nil, err
 	}
 	return starlark.None, nil
 }
 
-func list_extend(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+func (v *List) clear(thread *starlark.Thread, fnname string, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if err := starlark.UnpackPositionalArgs(fnname, args, kwargs, 0); err != nil {
+		return nil, err
+	}
+	if err := v.Clear(); err != nil {
+		return nil, err
+	}
+	return starlark.None, nil
+}
+
+func (v *List) extend(thread *starlark.Thread, fnname string, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var iterable starlark.Iterable
-	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 1, &iterable); err != nil {
+	if err := starlark.UnpackPositionalArgs(fnname, args, kwargs, 1, &iterable); err != nil {
 		return nil, err
 	}
-	recv := b.Receiver().(*List)
 	iter := iterable.Iterate()
+	defer iter.Done()
+
 	var p starlark.Value
 	for iter.Next(&p) {
-		if err := recv.Append(p); err != nil {
+		if err := v.Append(p); err != nil {
 			return nil, err
 		}
 	}
@@ -1116,14 +1095,13 @@ func asIndex(v starlark.Value, len int, result *int) (err error) {
 	return nil
 }
 
-func list_index(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+func (v *List) index(thread *starlark.Thread, fnname string, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var value, start_, end_ starlark.Value
-	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 1, &value, &start_, &end_); err != nil {
+	if err := starlark.UnpackPositionalArgs(fnname, args, kwargs, 1, &value, &start_, &end_); err != nil {
 		return nil, err
 	}
 
-	recv := b.Receiver().(*List)
-	len := recv.Len()
+	len := v.Len()
 	start := 0
 	if err := asIndex(start_, len, &start); err != nil {
 		return nil, err
@@ -1136,111 +1114,93 @@ func list_index(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tupl
 
 	// find
 	for i := start; i < end; i++ {
-		if ok, err := starlark.Equal(recv.Index(i), value); ok {
+		if ok, err := starlark.Equal(v.Index(i), value); ok {
 			return starlark.MakeInt(i), nil
 		} else if err != nil {
-			return nil, fmt.Errorf("%s: %w", b.Name(), err)
+			return nil, fmt.Errorf("%s: %w", fnname, err)
 		}
 	}
-	return nil, fmt.Errorf("%s: value not in list", b.Name())
+	return nil, fmt.Errorf("%s: value not in list", fnname)
 }
 
-func list_insert(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var index int
-	var object starlark.Value
-	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 2, &index, &object); err != nil {
+func (v *List) insert(thread *starlark.Thread, fnname string, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		index  int
+		object starlark.Value
+	)
+	if err := starlark.UnpackPositionalArgs(fnname, args, kwargs, 2, &index, &object); err != nil {
 		return nil, err
 	}
-	recv := b.Receiver().(*List)
-	if err := recv.checkMutable("insert into"); err != nil {
-		return nil, fmt.Errorf("%s: %w", recv.Type(), err)
+	if err := v.checkMutable("insert into"); err != nil {
+		return nil, fmt.Errorf("%s: %w", v.Type(), err)
 	}
 
-	len := recv.Len()
+	len := v.Len()
 	index = absIndex(index, len)
 	if index >= len {
-		if err := recv.Append(object); err != nil {
+		if err := v.Append(object); err != nil {
 			return nil, err
 		}
 		return starlark.None, nil
 	}
 
-	val := recv.list.NewElement()
-	if err := starToProto(object, recv.fd, &val); err != nil {
+	val, err := toProtobuf(object, v.fd, protoreflect.ValueOfList(v.list))
+	if err != nil {
 		return nil, err
-	}
-
-	v := object
-	if recv.isMutableType() {
-		if !isOwnType(v) {
-			v = protoToStar(val, recv.fd)
-		}
 	}
 
 	for i := index; i < len; i++ {
-		swap := recv.list.Get(i)
-		recv.list.Set(i, val)
+		swap := v.list.Get(i)
+		v.list.Set(i, val)
 		val = swap
-
-		if recv.isMutableType() {
-			swapRef := recv.refs[i]
-			recv.refs[i] = v
-			v = swapRef
-		}
 	}
 
-	recv.list.Append(val)
-	if recv.isMutableType() {
-		recv.refs = append(recv.refs, v)
-	}
-
+	v.list.Append(val)
 	return starlark.None, nil
 }
 
-func list_pop(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	recv := b.Receiver().(*List)
-	n := recv.Len()
+func (v *List) pop(thread *starlark.Thread, fnname string, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	n := v.Len()
 	i := n - 1
-	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 0, &i); err != nil {
+	if err := starlark.UnpackPositionalArgs(fnname, args, kwargs, 0, &i); err != nil {
 		return nil, err
 	}
-	if err := recv.checkMutable("pop from"); err != nil {
-		return nil, fmt.Errorf("%s: %w", b.Name(), err)
+	if err := v.checkMutable("pop from"); err != nil {
+		return nil, fmt.Errorf("%s: %w", fnname, err)
 	}
 	origI := i
 	if i < 0 {
 		i += n
 	}
 	if i < 0 || i >= n {
-		return nil, fmt.Errorf("%s: %w", b.Name(), outOfRange(origI, n, recv))
+		return nil, fmt.Errorf("%s: %w", fnname, outOfRange(origI, n, v))
 	}
-	return recv.Pop(i)
+	return v.Pop(i)
 }
 
-func list_remove(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+func (v *List) remove(thread *starlark.Thread, fnname string, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var value starlark.Value
-	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 1, &value); err != nil {
+	if err := starlark.UnpackPositionalArgs(fnname, args, kwargs, 1, &value); err != nil {
 		return nil, err
 	}
-	recv := b.Receiver().(*List)
-	if err := recv.checkMutable("remove from"); err != nil {
-		return nil, fmt.Errorf("%s: %w", recv.Type(), err)
+	if err := v.checkMutable("remove from"); err != nil {
+		return nil, fmt.Errorf("%s: %w", v.Type(), err)
 	}
 
 	// find
-	for i := 0; i < recv.Len(); i++ {
-		if ok, err := starlark.Equal(recv.Index(i), value); ok {
+	for i := 0; i < v.Len(); i++ {
+		if ok, err := starlark.Equal(v.Index(i), value); ok {
 			// pop
-			if _, err := recv.Pop(i); err != nil {
+			if _, err := v.Pop(i); err != nil {
 				return nil, err
 			}
 			return starlark.None, nil
 
 		} else if err != nil {
-			return nil, fmt.Errorf("%s: %w", b.Name(), err)
+			return nil, fmt.Errorf("%s: %w", fnname, err)
 		}
 	}
-	return nil, fmt.Errorf("%s: element not found", b.Name())
+	return nil, fmt.Errorf("%s: element not found", fnname)
 }
 
 // Enum is the type of a protobuf enum.
@@ -1304,35 +1264,30 @@ type Map struct {
 	keyfd protoreflect.FieldDescriptor
 	valfd protoreflect.FieldDescriptor
 
-	frozen    bool
+	frozen    *bool
 	itercount uint32
-	refs      map[interface{}]starlark.Value // interface{} == protobuf.MapKey.Interface()
 }
 
 func (m *Map) Clear() error {
-	m.m.Range(func(key protoreflect.MapKey, val protoreflect.Value) bool {
+	m.m.Range(func(key protoreflect.MapKey, _ protoreflect.Value) bool {
 		m.m.Clear(key)
 		return true
 	})
-	m.refs = nil // TODO: iterate?
 	return nil
 }
 func (m *Map) parseKey(k starlark.Value) (protoreflect.MapKey, error) {
-	var keyval protoreflect.Value
-	if err := starToProto(k, m.keyfd, &keyval); err != nil {
+	keyval, err := toProtobuf(k, m.keyfd, protoreflect.ValueOfMap(m.m))
+	if err != nil {
 		return protoreflect.MapKey{}, err
 	}
 	return keyval.MapKey(), nil
 }
-func (m *Map) get(key protoreflect.MapKey) (starlark.Value, bool) {
-	if m.isMutableType() && m.m.Has(key) {
-		return m.refs[key.Interface()], true
-	}
+func (m *Map) toValue(key protoreflect.MapKey) (starlark.Value, bool) {
 	val := m.m.Get(key)
 	if !val.IsValid() {
 		return starlark.None, false
 	}
-	return protoToStar(val, m.valfd), true
+	return toStarlark(val, m.valfd, m.frozen), true
 }
 func (m *Map) Delete(k starlark.Value) (v starlark.Value, found bool, err error) {
 	key, err := m.parseKey(k)
@@ -1340,7 +1295,7 @@ func (m *Map) Delete(k starlark.Value) (v starlark.Value, found bool, err error)
 		return nil, false, err
 	}
 
-	v, found = m.get(key)
+	v, found = m.toValue(key)
 	if found {
 		m.m.Clear(key)
 	}
@@ -1352,7 +1307,7 @@ func (m *Map) Get(k starlark.Value) (v starlark.Value, found bool, err error) {
 		return nil, false, err
 	}
 
-	v, found = m.get(key)
+	v, found = m.toValue(key)
 	return v, found, nil
 }
 
@@ -1371,22 +1326,13 @@ func (a byTuple) Less(i, j int) bool {
 
 func (m *Map) Items() []starlark.Tuple {
 	v := make([]starlark.Tuple, 0, m.Len())
-	if m.isMutableType() {
-		for key, val := range m.refs {
-			v = append(v, starlark.Tuple{
-				protoToStar(protoreflect.ValueOf(key), m.keyfd),
-				val,
-			})
-		}
-	} else {
-		m.m.Range(func(key protoreflect.MapKey, val protoreflect.Value) bool {
-			v = append(v, starlark.Tuple{
-				protoToStar(key.Value(), m.keyfd),
-				protoToStar(val, m.valfd),
-			})
-			return true
+	m.m.Range(func(key protoreflect.MapKey, val protoreflect.Value) bool {
+		v = append(v, starlark.Tuple{
+			toStarlark(key.Value(), m.keyfd, m.frozen),
+			toStarlark(val, m.valfd, m.frozen),
 		})
-	}
+		return true
+	})
 	sort.Sort(byTuple(v))
 	return v
 }
@@ -1406,18 +1352,10 @@ func (a byValue) Less(i, j int) bool {
 
 func (m *Map) Keys() []starlark.Value {
 	v := make([]starlark.Value, 0, m.Len())
-	if m.isMutableType() {
-		for key := range m.refs {
-			v = append(
-				v, protoToStar(protoreflect.ValueOf(key), m.keyfd),
-			)
-		}
-	} else {
-		m.m.Range(func(key protoreflect.MapKey, _ protoreflect.Value) bool {
-			v = append(v, protoToStar(key.Value(), m.keyfd))
-			return true
-		})
-	}
+	m.m.Range(func(key protoreflect.MapKey, _ protoreflect.Value) bool {
+		v = append(v, toStarlark(key.Value(), m.keyfd, m.frozen))
+		return true
+	})
 	sort.Sort(byValue(v))
 	return v
 }
@@ -1441,13 +1379,13 @@ func (ki *keyIterator) Next(k *starlark.Value) bool {
 }
 
 func (ki *keyIterator) Done() {
-	if !ki.m.frozen {
+	if !*ki.m.frozen {
 		ki.m.itercount--
 	}
 }
 
 func (m *Map) Iterate() starlark.Iterator {
-	if !m.frozen {
+	if !*m.frozen {
 		m.itercount--
 	}
 	return &keyIterator{m: m, keys: m.Keys()}
@@ -1456,23 +1394,18 @@ func (m *Map) SetKey(k, v starlark.Value) error {
 	if err := m.checkMutable("set"); err != nil {
 		return err
 	}
-	var keyval protoreflect.Value
-	if err := starToProto(k, m.keyfd, &keyval); err != nil {
+
+	keyval, err := toProtobuf(k, m.keyfd, protoreflect.Value{})
+	if err != nil {
 		return err
 	}
 	key := keyval.MapKey()
 
-	val := m.m.NewValue()
-	if err := starToProto(k, m.valfd, &val); err != nil {
+	val, err := toProtobuf(k, m.valfd, protoreflect.ValueOfMap(m.m))
+	if err != nil {
 		return err
 	}
 	m.m.Set(key, val)
-	if m.isMutableType() {
-		if !isOwnType(v) {
-			v = protoToStar(val, m.valfd)
-		}
-		m.refs[k] = v
-	}
 	return nil
 }
 func (m *Map) String() string {
@@ -1493,26 +1426,12 @@ func (m *Map) String() string {
 	buf.WriteByte('}')
 	return buf.String()
 }
-func (m *Map) Type() string { return "proto.map" } // TODO
-func (m *Map) isMutableType() bool {
-	isMutable := m.valfd.Kind() == protoreflect.MessageKind
-	if isMutable && m.refs == nil && !m.frozen {
-		m.refs = make(map[interface{}]starlark.Value) // lazy init
-	}
-	return isMutable
-}
-func (m *Map) Freeze() {
-	if !m.frozen {
-		m.frozen = true
-		for _, v := range m.refs {
-			v.Freeze()
-		}
-	}
-}
+func (m *Map) Type() string          { return "proto.map" } // TODO
+func (m *Map) Freeze()               { *m.frozen = true }
 func (m *Map) Truth() starlark.Bool  { return m.Len() > 0 }
 func (m *Map) Hash() (uint32, error) { return 0, fmt.Errorf("unhashable type: map") }
 func (m *Map) checkMutable(verb string) error {
-	if m.frozen {
+	if *m.frozen {
 		return fmt.Errorf("cannot %s frozen map", verb)
 	}
 	if m.itercount > 0 {
@@ -1521,44 +1440,55 @@ func (m *Map) checkMutable(verb string) error {
 	return nil
 }
 
-var (
-	// methods from starlark/library.go
-	mapMethods = map[string]*starlark.Builtin{
-		"clear": starlark.NewBuiltin("clear", dict_clear),
-		"get":   starlark.NewBuiltin("get", dict_get),
-		"items": starlark.NewBuiltin("items", dict_items),
-		"keys":  starlark.NewBuiltin("keys", dict_keys),
-		"pop":   starlark.NewBuiltin("pop", dict_pop),
-		//"popitem":    starlark.NewBuiltin("popitem", dict_popitem), // TODO: list based?
-		"setdefault": starlark.NewBuiltin("setdefault", dict_setdefault),
-		//"update":     starlark.NewBuiltin("update", dict_update), // TODO: update list.
-		"values": starlark.NewBuiltin("values", dict_values),
+type mapAttr func(m *Map) starlark.Value
+
+// methods from starlark/library.go
+var mapAttrs = map[string]mapAttr{
+	"clear": func(m *Map) starlark.Value { return internal.MakeMethod(m, "clear", m.clear) },
+	"get":   func(m *Map) starlark.Value { return internal.MakeMethod(m, "get", m.get) },
+	"items": func(m *Map) starlark.Value { return internal.MakeMethod(m, "items", m.items) },
+	"keys":  func(m *Map) starlark.Value { return internal.MakeMethod(m, "keys", m.keys) },
+	"pop":   func(m *Map) starlark.Value { return internal.MakeMethod(m, "pop", m.pop) },
+	//"popitem":    starlark.NewBuiltin("popitem", dict_popitem), // TODO: list based?
+	"setdefault": func(m *Map) starlark.Value { return internal.MakeMethod(m, "setdefault", m.setdefault) },
+	//"update":     starlark.NewBuiltin("update", dict_update), // TODO: update list.
+	"values": func(m *Map) starlark.Value { return internal.MakeMethod(m, "values", m.values) },
+}
+
+func (m *Map) Attr(name string) (starlark.Value, error) {
+	if a := mapAttrs[name]; a != nil {
+		return a(m), nil
 	}
-)
+	return nil, nil
+}
+func (m *Map) AttrNames() []string {
+	names := make([]string, 0, len(mapAttrs))
+	for name := range mapAttrs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
 
-func (m *Map) Attr(name string) (starlark.Value, error) { return bindAttr(m, name, mapMethods) }
-func (m *Map) AttrNames() []string                      { return builtinAttrNames(mapMethods) }
-
-func dict_clear(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 0); err != nil {
+func (m *Map) clear(thread *starlark.Thread, fnname string, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if err := starlark.UnpackPositionalArgs(fnname, args, kwargs, 0); err != nil {
 		return nil, err
 	}
-	recv := b.Receiver().(*Map)
-	if err := recv.Clear(); err != nil {
+	if err := m.Clear(); err != nil {
 		return nil, err
 	}
 	return starlark.None, nil
 }
 
-func dict_get(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+func (m *Map) get(thread *starlark.Thread, fnname string, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var key, dflt starlark.Value
-	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 1, &key, &dflt); err != nil {
+	if err := starlark.UnpackPositionalArgs(fnname, args, kwargs, 1, &key, &dflt); err != nil {
 		return nil, err
 	}
-	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 0); err != nil {
+	if err := starlark.UnpackPositionalArgs(fnname, args, kwargs, 0); err != nil {
 		return nil, err
 	}
-	if v, ok, err := b.Receiver().(*Map).Get(key); err != nil {
+	if v, ok, err := m.Get(key); err != nil {
 		return nil, err
 	} else if ok {
 		return v, nil
@@ -1568,11 +1498,11 @@ func dict_get(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple,
 	return starlark.None, nil
 }
 
-func dict_items(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 0); err != nil {
+func (m *Map) items(thread *starlark.Thread, fnname string, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if err := starlark.UnpackPositionalArgs(fnname, args, kwargs, 0); err != nil {
 		return nil, err
 	}
-	items := b.Receiver().(*Map).Items()
+	items := m.Items()
 	res := make([]starlark.Value, len(items))
 	for i, item := range items {
 		res[i] = item // convert [2]Value to Value
@@ -1580,34 +1510,33 @@ func dict_items(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tupl
 	return starlark.NewList(res), nil
 }
 
-func dict_keys(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 0); err != nil {
+func (m *Map) keys(_ *starlark.Thread, fnname string, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if err := starlark.UnpackPositionalArgs(fnname, args, kwargs, 0); err != nil {
 		return nil, err
 	}
-	return starlark.NewList(b.Receiver().(*Map).Keys()), nil
+	return starlark.NewList(m.Keys()), nil
 }
 
-func dict_pop(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+func (m *Map) pop(thread *starlark.Thread, fnname string, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var k, d starlark.Value
-	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 1, &k, &d); err != nil {
+	if err := starlark.UnpackPositionalArgs(fnname, args, kwargs, 1, &k, &d); err != nil {
 		return nil, err
 	}
-	if v, found, err := b.Receiver().(*Map).Delete(k); err != nil {
+	if v, found, err := m.Delete(k); err != nil {
 		return nil, err
 	} else if found {
 		return v, nil
 	} else if d != nil {
 		return d, nil
 	}
-	return nil, fmt.Errorf("%s: missing key", b.Name())
+	return nil, fmt.Errorf("%s: missing key", fnname)
 }
 
-func dict_setdefault(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+func (m *Map) setdefault(thread *starlark.Thread, fnname string, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var key, dflt starlark.Value = nil, starlark.None
-	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 1, &key, &dflt); err != nil {
+	if err := starlark.UnpackPositionalArgs(fnname, args, kwargs, 1, &key, &dflt); err != nil {
 		return nil, err
 	}
-	m := b.Receiver().(*Map)
 	if v, ok, err := m.Get(key); err != nil {
 		return nil, err
 	} else if ok {
@@ -1618,20 +1547,19 @@ func dict_setdefault(thread *starlark.Thread, b *starlark.Builtin, args starlark
 	return dflt, nil
 }
 
-func dict_update(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+/*func (m *Map) update(thread *starlark.Thread, fnname string, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	if len(args) > 1 {
 		return nil, fmt.Errorf("update: got %d arguments, want at most 1", len(args))
 	}
-	//m := b.Receiver().(*Map)
 	// TODO: update
 	return starlark.None, nil
-}
+}*/
 
-func dict_values(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 0); err != nil {
+func (m *Map) values(thread *starlark.Thread, fnname string, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if err := starlark.UnpackPositionalArgs(fnname, args, kwargs, 0); err != nil {
 		return nil, err
 	}
-	items := b.Receiver().(*Map).Items()
+	items := m.Items()
 	res := make([]starlark.Value, len(items))
 	for i, item := range items {
 		res[i] = item[1]

@@ -6,9 +6,11 @@ import (
 	"path/filepath"
 	"testing"
 
+	"go.starlark.net/resolve"
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"
 	"go.starlark.net/starlarktest"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 
 	_ "github.com/emcfarlane/starlarkproto/testpb" // import side effect
@@ -22,13 +24,15 @@ func load(thread *starlark.Thread, module string) (starlark.StringDict, error) {
 }
 
 func TestExecFile(t *testing.T) {
-	//protoregistry.GlobalFiles.RangeFiles(func(p protoreflect.FileDescriptor) bool {
-	//	fmt.Println("file!", p.FullName())
-	//	fmt.Println("     ", p.Path())
-	//	fmt.Println("     ", p.Name())
-	//	fmt.Println("     ", p.Package())
-	//	return true
-	//})
+	protoregistry.GlobalFiles.RangeFiles(func(p protoreflect.FileDescriptor) bool {
+		fmt.Println("file!", p.FullName())
+		fmt.Println("     ", p.Path())
+		fmt.Println("     ", p.Name())
+		fmt.Println("     ", p.Package())
+		return true
+	})
+
+	resolve.AllowGlobalReassign = true
 
 	thread := &starlark.Thread{Load: load}
 	starlarktest.SetReporter(thread, t)

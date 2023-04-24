@@ -26,13 +26,14 @@ import (
 	"github.com/emcfarlane/starlarkproto/internal"
 )
 
-func NewModule() *starlarkstruct.Module {
-	p := NewProto()
+// NewModule returns a new proto module.
+func NewModule(resolver protodesc.Resolver) *starlarkstruct.Module {
+	p := NewProto(resolver)
 	return &starlarkstruct.Module{
 		Name: "proto",
 		Members: starlark.StringDict{
-			"file": internal.MakeBuiltin("proto.file", p.File),
 			"new":            internal.MakeBuiltin("proto.new", p.New),
+			"file":           internal.MakeBuiltin("proto.file", p.File),
 			"marshal":        internal.MakeBuiltin("proto.marshal", p.Marshal),
 			"unmarshal":      internal.MakeBuiltin("proto.unmarshal", p.Unmarshal),
 			"marshal_json":   internal.MakeBuiltin("proto.marshal_json", p.MarshalJSON),
@@ -43,21 +44,23 @@ func NewModule() *starlarkstruct.Module {
 	}
 }
 
+// Proto is a proto module.
 type Proto struct {
 	resolver protodesc.Resolver
-	types protoregistry.Types // TODO: wrap resolver to register extensions.
+	types    protoregistry.Types // TODO: wrap resolver to register extensions.
 }
 
-func NewProto(resolver ) *Proto {
+func NewProto(resolver protodesc.Resolver) *Proto {
 	return &Proto{resolver: resolver}
 }
 
+// File returns the file descriptor for the given path.
+// file(path)
 func (p *Proto) File(thread *starlark.Thread, fnname string, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var name string
 	if err := starlark.UnpackPositionalArgs(fnname, args, kwargs, 1, &name); err != nil {
 		return nil, err
 	}
-
 	fileDesc, err := p.resolver.FindFileByPath(name)
 	if err != nil {
 		return nil, err
@@ -65,6 +68,8 @@ func (p *Proto) File(thread *starlark.Thread, fnname string, args starlark.Tuple
 	return &Descriptor{desc: fileDesc}, nil
 }
 
+// New returns a new descriptor.
+// new(name)
 func (p *Proto) New(thread *starlark.Thread, fnname string, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var name string
 	if err := starlark.UnpackPositionalArgs(fnname, args, kwargs, 1, &name); err != nil {
@@ -79,6 +84,8 @@ func (p *Proto) New(thread *starlark.Thread, fnname string, args starlark.Tuple,
 	return &Descriptor{desc: desc}, nil
 }
 
+// Marshal marshals a message to binary string.
+// marhsal(msg, allow_partial=False, deterministic=False, use_cache_size=False)
 func (p *Proto) Marshal(thread *starlark.Thread, fnname string, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var msg *Message
 	var options proto.MarshalOptions
@@ -97,6 +104,8 @@ func (p *Proto) Marshal(thread *starlark.Thread, fnname string, args starlark.Tu
 	return starlark.String(string(data)), nil
 }
 
+// Unmarshal unmarshals a message from binary string.
+// unmarshal(str, msg, merge=False, allow_partial=False, discard_unknown=False)
 func (p *Proto) Unmarshal(thread *starlark.Thread, fnname string, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var str string
 	var msg *Message
@@ -120,6 +129,8 @@ func (p *Proto) Unmarshal(thread *starlark.Thread, fnname string, args starlark.
 	return starlark.None, nil
 }
 
+// MarshalJSON marshals a message to json.
+// marshal_json(msg, multiline=False, indent=None, allow_partial=False, use_proto_names=False, use_enum_numbers=False, emit_unpopulated=False)
 func (p *Proto) MarshalJSON(thread *starlark.Thread, fnname string, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var msg *Message
 	var options protojson.MarshalOptions
@@ -141,6 +152,8 @@ func (p *Proto) MarshalJSON(thread *starlark.Thread, fnname string, args starlar
 	return starlark.String(string(data)), nil
 }
 
+// UnmarshalJSON unmarshals a json string to a message.
+// unmarshal_json(str, msg, allow_partial=False, discard_unknown=False)
 func (p *Proto) UnmarshalJSON(thread *starlark.Thread, fnname string, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var str string
 	var msg *Message
@@ -163,6 +176,8 @@ func (p *Proto) UnmarshalJSON(thread *starlark.Thread, fnname string, args starl
 	return starlark.None, nil
 }
 
+// MarshalText marshals a message to text.
+// marshal_text(msg, multiline=False, indent=None, allow_partial=False, emit_unknown=False)
 func (p *Proto) MarshalText(thread *starlark.Thread, fnname string, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var msg *Message
 	var options prototext.MarshalOptions
@@ -182,6 +197,8 @@ func (p *Proto) MarshalText(thread *starlark.Thread, fnname string, args starlar
 	return starlark.String(string(data)), nil
 }
 
+// UnmarshalText unmarshals a text string to a message.
+// unmarshal_text(str, msg, allow_partial=False, discard_unknown=False)
 func (p *Proto) UnmarshalText(thread *starlark.Thread, fnname string, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var str string
 	var msg *Message
@@ -218,6 +235,7 @@ type Descriptor struct {
 	attrs  map[string]protoreflect.Descriptor
 }
 
+// NewDescriptor creates a new descriptor.
 func NewDescriptor(desc protoreflect.Descriptor) *Descriptor { return &Descriptor{desc: desc} }
 
 // Descriptor exports proto.Descriptor
@@ -229,6 +247,8 @@ func (d *Descriptor) Freeze()               { d.frozen = true }
 func (d *Descriptor) Truth() starlark.Bool  { return d.desc != nil }
 func (d *Descriptor) Hash() (uint32, error) { return 0, fmt.Errorf("unhashable type: proto.desc") }
 func (d *Descriptor) Name() string          { return string(d.desc.Name()) } // TODO
+
+// CallInternal creates a new message or enum from a descriptor.
 func (d *Descriptor) CallInternal(thread *starlark.Thread, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	switch v := d.desc.(type) {
 	case protoreflect.FileDescriptor:

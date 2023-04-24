@@ -595,7 +595,6 @@ func (m *Message) encodeField(v starlark.Value, fd protoreflect.FieldDescriptor)
 	// It is equivalent to checking whether Cardinality is Repeated and
 	// that IsMap reports false.
 	if !fd.IsList() {
-		fmt.Println("encodeField", v)
 		return toProtobuf(v, fd, protoreflect.ValueOfMessage(m.msg))
 	}
 
@@ -697,7 +696,6 @@ func NewMessage(msg protoreflect.Message, args starlark.Tuple, kwargs []starlark
 		case starlark.HasAttrs:
 			m := &Message{msg: msg, frozen: new(bool)}
 			for _, name := range v.AttrNames() {
-				fmt.Println("----------hitting this?", name)
 				val, err := v.Attr(name)
 				if err != nil {
 					return nil, err

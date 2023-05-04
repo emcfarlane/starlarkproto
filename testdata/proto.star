@@ -106,5 +106,17 @@ m2 = test.Message()
 proto.unmarshal(data, m2)
 assert.eq(m, m2)
 
+# Marshal/Unmarshal text
+text = proto.marshal_text(m)
+m3 = test.Message()
+proto.unmarshal_text(text, m3)
+assert.eq(m, m3)
+
+# Marshal/Unmarshal json
+json = proto.marshal_json(m)
+m4 = test.Message()
+proto.unmarshal_json(json, m4)
+assert.eq(m, m4)
+
 # print(proto.marshal_json(m))
 # print(proto.marshal_text(m))

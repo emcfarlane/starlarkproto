@@ -170,7 +170,7 @@ func (p *Proto) UnmarshalJSON(thread *starlark.Thread, fnname string, args starl
 	if err := msg.checkMutable(fnname); err != nil {
 		return nil, err
 	}
-	if err := proto.Unmarshal([]byte(str), msg); err != nil {
+	if err := options.Unmarshal([]byte(str), msg); err != nil {
 		return nil, err
 	}
 	return starlark.None, nil
@@ -215,7 +215,7 @@ func (p *Proto) UnmarshalText(thread *starlark.Thread, fnname string, args starl
 	if err := msg.checkMutable(fnname); err != nil {
 		return nil, err
 	}
-	if err := proto.Unmarshal([]byte(str), msg); err != nil {
+	if err := options.Unmarshal([]byte(str), msg); err != nil {
 		return nil, err
 	}
 	return starlark.None, nil
